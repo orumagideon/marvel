@@ -1,0 +1,12 @@
+{
+  "1": {
+    "slot_id": 1,
+    "account_number": 999999,
+    "server": "test_server",
+    "phase": "Phase 1",
+    "is_active": true,
+    "display_name": "Test Account",
+    "created_at": "os.stat_result(st_mode=16877, st_ino=49338, st_dev=2096, st_nlink=7, st_uid=1000, st_gid=1000, st_size=4096, st_atime=1778370680, st_mtime=1778370679, st_ctime=1778370679)",
+    "last_login": null
+  }
+}

@@ -1,0 +1,60 @@
+# Marvel Trading Dashboard - Project Files
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.egg-info/
+.pytest_cache/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+venv/
+env/
+ENV/
+
+# Testing
+.coverage
+htmlcov/
+test_vault*.enc
+test_recovery*.csv
+test_accounts*.json
+test_creds*.enc
+
+# Build/Distribution
+build/
+dist/
+!marvel.spec
+*.manifest
+
+# Logs (except template)
+logs/*.log
+logs/*.jsonl
+
+# Data (keep structure, ignore contents)
+data/*.json
+data/*.csv
+data/*.enc
+data/*.key
+
+# OS
+.DS_Store
+Thumbs.db
+.gitkeep
+
+# IDE generated
+*.bak
+*.tmp
+.swp
+
+# Application runtime
+*.pid
+*.lock
