@@ -517,7 +517,8 @@ class MarvelDashboard(ctk.CTk):
             password_var=self.maven_password_var,
             server_var=self.maven_server_var,
             remember_var=self.maven_remember_var,
-            connect_callback=self._connect_maven
+            connect_callback=self._connect_maven,
+            instance_type=MT5InstanceType.MAVEN_FLEET
         )
 
         self.hedge_login_card = self._create_login_card(
@@ -530,7 +531,8 @@ class MarvelDashboard(ctk.CTk):
             password_var=self.hedge_password_var,
             server_var=self.hedge_server_var,
             remember_var=self.hedge_remember_var,
-            connect_callback=self._connect_hedge
+            connect_callback=self._connect_hedge,
+            instance_type=MT5InstanceType.HEDGE_ACCOUNT
         )
 
         self._load_saved_credentials()
@@ -560,7 +562,8 @@ class MarvelDashboard(ctk.CTk):
         password_var: ctk.StringVar,
         server_var: ctk.StringVar,
         remember_var: ctk.BooleanVar,
-        connect_callback: Callable[[], None]
+        connect_callback: Callable[[], None],
+        instance_type: MT5InstanceType = None
     ) -> ctk.CTkFrame:
         """Create one MT5 login card."""
         card = ctk.CTkFrame(parent, fg_color="#1a1a1a")
@@ -603,7 +606,8 @@ class MarvelDashboard(ctk.CTk):
         )
         status_label.grid(row=0, column=1, sticky="e")
 
-        button = ctk.CTkButton(
+        # Connect and Disconnect buttons
+        connect_btn = ctk.CTkButton(
             card,
             text="Connect & Login",
             font=("Arial", 12, "bold"),
@@ -611,7 +615,17 @@ class MarvelDashboard(ctk.CTk):
             hover_color="#0080ff",
             command=connect_callback
         )
-        button.grid(row=row_index + 1, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 14))
+        connect_btn.grid(row=row_index + 1, column=0, sticky="ew", padx=(15, 6), pady=(4, 14))
+
+        disconnect_btn = ctk.CTkButton(
+            card,
+            text="Disconnect",
+            font=("Arial", 12, "bold"),
+            fg_color="#555555",
+            hover_color="#777777",
+            command=(lambda: self._disconnect_instance(instance_type, status_label))
+        )
+        disconnect_btn.grid(row=row_index + 1, column=1, sticky="ew", padx=(6, 15), pady=(4, 14))
 
         card._status_label = status_label  # type: ignore[attr-defined]
         return card
@@ -787,6 +801,29 @@ class MarvelDashboard(ctk.CTk):
             self._refresh_connection_status()
         else:
             self._set_login_status(status_label, f"{success_prefix} login failed", "#ff0000")
+
+    def _disconnect_instance(self, instance_type: MT5InstanceType, status_label) -> None:
+        """Disconnect the given MT5 instance and refresh UI status."""
+        try:
+            if instance_type is None:
+                return
+
+            # Ask the mt5 manager to shutdown this instance
+            try:
+                self.system.mt5_manager.shutdown(instance_type)
+            except Exception:
+                # Best-effort: continue to update UI even if shutdown call fails
+                pass
+
+            # Friendly label
+            prefix = "Maven" if instance_type == MT5InstanceType.MAVEN_FLEET else "Hedge"
+            self._set_login_status(status_label, f"{prefix} disconnected", "#888888")
+            self._refresh_connection_status()
+        except Exception as e:
+            try:
+                self.logger.debug(f"Disconnect failed: {str(e)}")
+            except Exception:
+                pass
 
     def _set_login_status(self, label, text: str, color: str) -> None:
         """Update a login status label safely."""
