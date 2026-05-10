@@ -4,10 +4,13 @@ PyInstaller Spec File for Marvel Trading Dashboard
 Run: pyinstaller marvel.spec
 """
 
-import sys
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 block_cipher = None
+
+icon_path = 'app_icon.ico' if Path('app_icon.ico').exists() else None
 
 a = Analysis(
     ['main.py'],
@@ -58,7 +61,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='app_icon.ico',  # Optional: add your icon file
+    icon=icon_path,
 )
 
 coll = COLLECT(
