@@ -9,6 +9,8 @@ import asyncio
 import threading
 from datetime import datetime
 from app.core.orchestrator import get_system
+from app.mt5_bridge.connection_manager import MT5InstanceType, ConnectionState
+from app.utils.config import get_config
 from app.ui.components import (
     MarketFeedWidget, AccountHealthWidget, StatusIndicatorWidget,
     TradingControlsWidget, AccountGridWidget
@@ -31,10 +33,24 @@ class MarvelDashboard(ctk.CTk):
         # Initialize system
         self.system = get_system()
         self.logger = self.system.logger
+        self.config = get_config()
+        self.credentials_vault = self.system.account_manager.vault
         
         # UI State
         self.update_thread: Optional[threading.Thread] = None
         self.is_running = True
+
+        self.maven_terminal_var = ctk.StringVar(value=self.config.get("mt5.maven_terminal_path", ""))
+        self.maven_account_var = ctk.StringVar(value="")
+        self.maven_password_var = ctk.StringVar(value="")
+        self.maven_server_var = ctk.StringVar(value="")
+        self.maven_remember_var = ctk.BooleanVar(value=True)
+
+        self.hedge_terminal_var = ctk.StringVar(value=self.config.get("mt5.hedge_terminal_path", ""))
+        self.hedge_account_var = ctk.StringVar(value="")
+        self.hedge_password_var = ctk.StringVar(value="")
+        self.hedge_server_var = ctk.StringVar(value="")
+        self.hedge_remember_var = ctk.BooleanVar(value=True)
         
         # Configure grid
         self.grid_rowconfigure(0, weight=1)
@@ -54,15 +70,18 @@ class MarvelDashboard(ctk.CTk):
         # Main container
         main_container = ctk.CTkFrame(self, fg_color="#0a0a0a")
         main_container.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        main_container.grid_rowconfigure(1, weight=1)
+        main_container.grid_rowconfigure(2, weight=1)
         main_container.grid_columnconfigure(0, weight=1)
         
         # === HEADER ===
         self._create_header(main_container)
+
+        # === LOGIN PANEL ===
+        self._create_login_panel(main_container)
         
         # === MAIN CONTENT AREA ===
         content_frame = ctk.CTkFrame(main_container, fg_color="#0a0a0a")
-        content_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        content_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
         content_frame.grid_rowconfigure(0, weight=1)
         content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_columnconfigure(1, weight=1)
@@ -112,6 +131,275 @@ class MarvelDashboard(ctk.CTk):
             text_color="#666"
         )
         session_label.pack(side="right", padx=20, pady=20)
+
+    def _create_login_panel(self, parent) -> None:
+        """Create MT5 login panel for Maven and hedge accounts"""
+        login_panel = ctk.CTkFrame(parent, fg_color="#111111")
+        login_panel.grid(row=1, column=0, sticky="ew", padx=10, pady=(10, 0))
+        login_panel.grid_columnconfigure(0, weight=1)
+        login_panel.grid_columnconfigure(1, weight=1)
+
+        title = ctk.CTkLabel(
+            login_panel,
+            text="MT5 LOGIN",
+            font=("Arial", 12, "bold"),
+            text_color="#00ff88"
+        )
+        title.grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 6))
+
+        self.maven_login_status_label = ctk.CTkLabel(
+            login_panel,
+            text="Maven: disconnected",
+            font=("Arial", 10),
+            text_color="#888888"
+        )
+        self.maven_login_status_label.grid(row=0, column=1, sticky="e", padx=15, pady=(10, 6))
+
+        self.maven_login_card = self._create_login_card(
+            login_panel,
+            title_text="MAVEN FLEET LOGIN",
+            row=1,
+            column=0,
+            terminal_var=self.maven_terminal_var,
+            account_var=self.maven_account_var,
+            password_var=self.maven_password_var,
+            server_var=self.maven_server_var,
+            remember_var=self.maven_remember_var,
+            connect_callback=self._connect_maven
+        )
+
+        self.hedge_login_card = self._create_login_card(
+            login_panel,
+            title_text="PERSONAL HEDGE LOGIN",
+            row=1,
+            column=1,
+            terminal_var=self.hedge_terminal_var,
+            account_var=self.hedge_account_var,
+            password_var=self.hedge_password_var,
+            server_var=self.hedge_server_var,
+            remember_var=self.hedge_remember_var,
+            connect_callback=self._connect_hedge
+        )
+
+        self._load_saved_credentials()
+
+    def _create_login_card(
+        self,
+        parent,
+        title_text: str,
+        row: int,
+        column: int,
+        terminal_var: ctk.StringVar,
+        account_var: ctk.StringVar,
+        password_var: ctk.StringVar,
+        server_var: ctk.StringVar,
+        remember_var: ctk.BooleanVar,
+        connect_callback: Callable[[], None]
+    ) -> ctk.CTkFrame:
+        """Create one MT5 login card."""
+        card = ctk.CTkFrame(parent, fg_color="#1a1a1a")
+        card.grid(row=row, column=column, sticky="nsew", padx=10, pady=(0, 12))
+        card.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            card,
+            text=title_text,
+            font=("Arial", 12, "bold"),
+            text_color="#00ff88"
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(12, 10))
+
+        row_index = 1
+        self._add_login_field(card, row_index, "Terminal Path", terminal_var)
+        row_index += 1
+        self._add_login_field(card, row_index, "Account", account_var)
+        row_index += 1
+        self._add_login_field(card, row_index, "Password", password_var, show="*")
+        row_index += 1
+        self._add_login_field(card, row_index, "Server", server_var)
+        row_index += 1
+
+        options_frame = ctk.CTkFrame(card, fg_color="#1a1a1a")
+        options_frame.grid(row=row_index, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 8))
+        options_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkCheckBox(
+            options_frame,
+            text="Remember credentials",
+            variable=remember_var,
+            font=("Arial", 10)
+        ).grid(row=0, column=0, sticky="w")
+
+        status_label = ctk.CTkLabel(
+            options_frame,
+            text="Disconnected",
+            font=("Arial", 10, "bold"),
+            text_color="#888888"
+        )
+        status_label.grid(row=0, column=1, sticky="e")
+
+        button = ctk.CTkButton(
+            card,
+            text="Connect & Login",
+            font=("Arial", 12, "bold"),
+            fg_color="#0066cc",
+            hover_color="#0080ff",
+            command=connect_callback
+        )
+        button.grid(row=row_index + 1, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 14))
+
+        card._status_label = status_label  # type: ignore[attr-defined]
+        return card
+
+    def _add_login_field(self, parent, row: int, label: str, variable: ctk.StringVar, show: str = "") -> None:
+        """Helper for login form fields."""
+        ctk.CTkLabel(
+            parent,
+            text=label,
+            font=("Arial", 10),
+            text_color="#888"
+        ).grid(row=row, column=0, sticky="w", padx=15, pady=4)
+
+        entry = ctk.CTkEntry(parent, textvariable=variable, show=show)
+        entry.grid(row=row, column=1, sticky="ew", padx=15, pady=4)
+
+    def _load_saved_credentials(self) -> None:
+        """Load saved login credentials and terminal paths into the form."""
+        try:
+            maven_saved = self.credentials_vault.get_account("dashboard_maven_login") or {}
+            hedge_saved = self.credentials_vault.get_account("dashboard_hedge_login") or {}
+
+            if maven_saved:
+                self.maven_account_var.set(str(maven_saved.get("account_number", "")))
+                self.maven_password_var.set(maven_saved.get("password", ""))
+                self.maven_server_var.set(maven_saved.get("server", ""))
+                self.maven_terminal_var.set(maven_saved.get("terminal_path", self.maven_terminal_var.get()))
+
+            if hedge_saved:
+                self.hedge_account_var.set(str(hedge_saved.get("account_number", "")))
+                self.hedge_password_var.set(hedge_saved.get("password", ""))
+                self.hedge_server_var.set(hedge_saved.get("server", ""))
+                self.hedge_terminal_var.set(hedge_saved.get("terminal_path", self.hedge_terminal_var.get()))
+        except Exception as e:
+            self.logger.debug(f"Failed to load saved credentials: {str(e)}")
+
+    def _persist_credentials(
+        self,
+        account_id: str,
+        account: int,
+        password: str,
+        server: str,
+        terminal_path: str,
+        remember: bool
+    ) -> None:
+        """Persist login credentials and terminal path when requested."""
+        if not remember:
+            return
+
+        try:
+            self.credentials_vault.add_account(
+                account_id,
+                {
+                    "account_number": account,
+                    "password": password,
+                    "server": server,
+                    "terminal_path": terminal_path
+                }
+            )
+        except Exception as e:
+            self.logger.debug(f"Failed to persist credentials for {account_id}: {str(e)}")
+
+    def _connect_maven(self) -> None:
+        """Connect and log in the Maven MT5 instance."""
+        self._connect_instance(
+            instance_type=MT5InstanceType.MAVEN_FLEET,
+            terminal_path=self.maven_terminal_var.get().strip(),
+            account_text=self.maven_account_var.get().strip(),
+            password=self.maven_password_var.get(),
+            server=self.maven_server_var.get().strip(),
+            status_label=self.maven_login_card._status_label,  # type: ignore[attr-defined]
+            success_prefix="Maven",
+            remember=self.maven_remember_var.get(),
+            credential_id="dashboard_maven_login"
+        )
+
+    def _connect_hedge(self) -> None:
+        """Connect and log in the hedge MT5 instance."""
+        self._connect_instance(
+            instance_type=MT5InstanceType.HEDGE_ACCOUNT,
+            terminal_path=self.hedge_terminal_var.get().strip(),
+            account_text=self.hedge_account_var.get().strip(),
+            password=self.hedge_password_var.get(),
+            server=self.hedge_server_var.get().strip(),
+            status_label=self.hedge_login_card._status_label,  # type: ignore[attr-defined]
+            success_prefix="Hedge",
+            remember=self.hedge_remember_var.get(),
+            credential_id="dashboard_hedge_login"
+        )
+
+    def _connect_instance(
+        self,
+        instance_type: MT5InstanceType,
+        terminal_path: str,
+        account_text: str,
+        password: str,
+        server: str,
+        status_label,
+        success_prefix: str,
+        remember: bool,
+        credential_id: str
+    ) -> None:
+        """Shared connect/login flow for both MT5 instances."""
+        if not terminal_path:
+            self._set_login_status(status_label, f"{success_prefix} terminal path required", "#ff8800")
+            return
+
+        if not account_text.isdigit():
+            self._set_login_status(status_label, f"{success_prefix} account must be numeric", "#ff0000")
+            return
+
+        if not password or not server:
+            self._set_login_status(status_label, f"{success_prefix} password and server required", "#ff0000")
+            return
+
+        account = int(account_text)
+
+        if instance_type == MT5InstanceType.MAVEN_FLEET:
+            initialized = self.system.initialize_maven_instance(terminal_path)
+            login_ok = initialized and self.system.login_maven_account(account, password, server)
+        else:
+            initialized = self.system.initialize_hedge_instance(terminal_path)
+            login_ok = initialized and self.system.login_hedge_account(account, password, server)
+
+        if login_ok:
+            self._set_login_status(status_label, f"{success_prefix} connected", "#00ff88")
+            self._persist_credentials(credential_id, account, password, server, terminal_path, remember)
+
+            if instance_type == MT5InstanceType.MAVEN_FLEET:
+                self.config.set("mt5.maven_terminal_path", terminal_path)
+            else:
+                self.config.set("mt5.hedge_terminal_path", terminal_path)
+
+            self._refresh_connection_status()
+        else:
+            self._set_login_status(status_label, f"{success_prefix} login failed", "#ff0000")
+
+    def _set_login_status(self, label, text: str, color: str) -> None:
+        """Update a login status label safely."""
+        try:
+            label.configure(text=text, text_color=color)
+        except Exception:
+            pass
+
+    def _refresh_connection_status(self) -> None:
+        """Refresh header status indicators from current MT5 state."""
+        try:
+            maven_status = self.system.mt5_manager.get_status(MT5InstanceType.MAVEN_FLEET)
+            hedge_status = self.system.mt5_manager.get_status(MT5InstanceType.HEDGE_ACCOUNT)
+
+            self.maven_status.set_status(maven_status.get("state", ConnectionState.DISCONNECTED.value))
+            self.hedge_status.set_status(hedge_status.get("state", ConnectionState.DISCONNECTED.value))
+        except Exception as e:
+            self.logger.debug(f"Status refresh error: {str(e)}")
     
     def _create_left_panel(self, parent) -> ctk.CTkFrame:
         """Create left panel with market data and health"""
@@ -228,12 +516,7 @@ class MarvelDashboard(ctk.CTk):
                         self.market_feed.update_data(market_data)
                     
                     # Update status indicators
-                    maven_connected = self.system.mt5_manager.is_connected(
-                        self.system.mt5_manager.MT5InstanceType.MAVEN_FLEET
-                        if hasattr(self.system.mt5_manager, 'MT5InstanceType')
-                        else "maven_fleet"
-                    )
-                    # Note: This needs adjustment for proper status
+                    self._refresh_connection_status()
                     
                     # Update account grid
                     self.account_grid.refresh_accounts()
