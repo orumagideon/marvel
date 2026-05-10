@@ -24,7 +24,6 @@ a = Analysis(
         'customtkinter',
         'cryptography',
         'cryptography.fernet',
-        'pandas',
         'dotenv',
     ],
     hookspath=[],
@@ -48,7 +47,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Marvel',
+    name='MarvelTradingDashboard',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -70,5 +69,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Marvel',
+    name='MarvelTradingDashboard',
 )

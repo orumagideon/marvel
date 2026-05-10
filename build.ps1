@@ -44,7 +44,7 @@ else {
 # Install dependencies
 Write-Host ""
 Write-Host "[3/5] Installing/updating dependencies..."
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 # Clean old builds
 Write-Host ""
@@ -64,7 +64,7 @@ Write-Host "[5/5] Building executable..."
 Write-Host "This may take 2-5 minutes..."
 Write-Host ""
 
-pyinstaller marvel.spec --distpath=dist --buildpath=build
+python -m PyInstaller marvel.spec --distpath=dist --workpath=build
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
@@ -80,14 +80,14 @@ Write-Host "====================================================================
 Write-Host ""
 Write-Host "SUCCESS! Your executable has been created:" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Location: dist\Marvel\Marvel.exe"
+Write-Host "  Location: dist\MarvelTradingDashboard\MarvelTradingDashboard.exe"
 Write-Host ""
 Write-Host "To run the dashboard:"
-Write-Host "  1. Navigate to: dist\Marvel\"
-Write-Host "  2. Double-click: Marvel.exe"
+Write-Host "  1. Navigate to: dist\MarvelTradingDashboard\"
+Write-Host "  2. Double-click: MarvelTradingDashboard.exe"
 Write-Host ""
 Write-Host "Or run from PowerShell:"
-Write-Host "  .\dist\Marvel\Marvel.exe"
+Write-Host "  .\dist\MarvelTradingDashboard\MarvelTradingDashboard.exe"
 Write-Host ""
 Write-Host "============================================================================"
 Write-Host ""

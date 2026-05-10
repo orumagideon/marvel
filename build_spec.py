@@ -11,7 +11,6 @@ hiddenimports = [
     'MetaTrader5',
     'customtkinter',
     'cryptography.fernet',
-    'pandas',
 ]
 
 # Data files to include

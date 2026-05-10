@@ -38,7 +38,7 @@ if errorlevel 1 (
 
 echo.
 echo [3/5] Installing/updating dependencies...
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 echo.
 echo [4/5] Building executable...
@@ -48,10 +48,9 @@ echo.
 REM Remove old build
 if exist dist\Marvel rmdir /s /q dist\Marvel
 if exist build rmdir /s /q build
-if exist *.spec del *.spec
 
 REM Run PyInstaller using python -m
-python -m PyInstaller marvel.spec --distpath=dist --buildpath=build
+python -m PyInstaller marvel.spec --distpath=dist --workpath=build
 
 if errorlevel 1 (
     echo.
@@ -66,14 +65,14 @@ echo [5/5] Build Complete!
 echo ============================================================================
 echo.
 echo SUCCESS! Your executable has been created:
-echo   Location: dist\Marvel\Marvel.exe
+echo   Location: dist\MarvelTradingDashboard\MarvelTradingDashboard.exe
 echo.
 echo To run the dashboard:
-echo   1. Navigate to: dist\Marvel\
-echo   2. Double-click: Marvel.exe
+echo   1. Navigate to: dist\MarvelTradingDashboard\
+echo   2. Double-click: MarvelTradingDashboard.exe
 echo.
 echo Or run from command line:
-echo   dist\Marvel\Marvel.exe
+echo   dist\MarvelTradingDashboard\MarvelTradingDashboard.exe
 echo.
 echo ============================================================================
 echo.
