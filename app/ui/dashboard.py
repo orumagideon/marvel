@@ -197,7 +197,7 @@ class MarvelDashboard(ctk.CTk):
 
         ctk.CTkLabel(
             login_panel,
-            text="Saved credentials will be reused if available.",
+            text="Saved credentials are stored in the encrypted vault and can auto-connect on startup.",
             font=("Arial", 9),
             text_color="#666666"
         ).grid(row=3, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 10))
@@ -537,7 +537,7 @@ class MarvelDashboard(ctk.CTk):
     async def _execute_buy(self) -> None:
         """Execute BUY order"""
         lot_size = self.trading_controls.get_lot_size()
-        symbol = "US100"
+        symbol = self.trading_controls.get_symbol()
         
         success, results = await self.system.execute_buy_order(symbol, lot_size)
         
@@ -549,7 +549,7 @@ class MarvelDashboard(ctk.CTk):
     async def _execute_sell(self) -> None:
         """Execute SELL order"""
         lot_size = self.trading_controls.get_lot_size()
-        symbol = "US100"
+        symbol = self.trading_controls.get_symbol()
         
         success, results = await self.system.execute_sell_order(symbol, lot_size)
         
@@ -560,8 +560,9 @@ class MarvelDashboard(ctk.CTk):
     
     async def _close_all(self) -> None:
         """Emergency close all positions"""
+        symbol = self.trading_controls.get_symbol()
         results = await self.system.close_all_emergency()
-        self.logger.info(f"Emergency close: {results.get('closed_count', 0)} positions closed")
+        self.logger.info(f"Emergency close for {symbol}: {results.get('closed_count', 0)} positions closed")
     
     def _start_update_loop(self) -> None:
         """Start background update thread"""
@@ -569,7 +570,9 @@ class MarvelDashboard(ctk.CTk):
             while self.is_running:
                 try:
                     # Update market data
-                    market_data = self.system.get_market_data()
+                    current_symbol = self.trading_controls.get_symbol()
+                    self.market_feed.set_symbol(current_symbol)
+                    market_data = self.system.get_market_data(current_symbol)
                     if market_data:
                         self.market_feed.update_data(market_data)
                     

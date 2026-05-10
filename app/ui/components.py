@@ -50,6 +50,11 @@ class MarketFeedWidget(ctk.CTkFrame):
             self.ask_label.configure(text=f"{data.get('ask', 0):.4f}")
             self.spread_label.configure(text=f"{data.get('spread_pips', 0):.2f} pips")
 
+    def set_symbol(self, symbol: str) -> None:
+        """Update the displayed symbol label."""
+        display_symbol = symbol.strip().upper() or "US100"
+        self.symbol_label.configure(text=display_symbol)
+
 
 class AccountHealthWidget(ctk.CTkFrame):
     """Account health and risk visualization"""
@@ -133,12 +138,21 @@ class TradingControlsWidget(ctk.CTkFrame):
     
     def __init__(self, parent, command_callback: Callable, **kwargs):
         super().__init__(parent, fg_color="#1a1a1a", **kwargs)
-        
+
         self.command_callback = command_callback
+
+        # Symbol input
+        symbol_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
+        symbol_frame.pack(fill="x", padx=20, pady=(10, 6))
+
+        ctk.CTkLabel(symbol_frame, text="Symbol:", font=("Arial", 11), text_color="#888").pack(side="left")
+        self.symbol_var = ctk.StringVar(value="US100")
+        self.symbol_input = ctk.CTkEntry(symbol_frame, textvariable=self.symbol_var, width=130)
+        self.symbol_input.pack(side="left", padx=10)
         
         # Lot size input
         lot_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        lot_frame.pack(fill="x", padx=20, pady=10)
+        lot_frame.pack(fill="x", padx=20, pady=(6, 10))
         
         ctk.CTkLabel(lot_frame, text="Lot Size:", font=("Arial", 11), text_color="#888").pack(side="left")
         self.lot_var = ctk.StringVar(value="0.1")
@@ -210,6 +224,11 @@ class TradingControlsWidget(ctk.CTkFrame):
             return float(self.lot_var.get())
         except ValueError:
             return 0.1
+
+    def get_symbol(self) -> str:
+        """Get the trade symbol entered by the user."""
+        symbol = self.symbol_var.get().strip().upper().replace(" ", "")
+        return symbol or "US100"
 
 
 class AccountGridWidget(ctk.CTkFrame):
