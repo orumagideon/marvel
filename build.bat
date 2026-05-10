@@ -50,8 +50,8 @@ if exist dist\Marvel rmdir /s /q dist\Marvel
 if exist build rmdir /s /q build
 if exist *.spec del *.spec
 
-REM Run PyInstaller
-pyinstaller marvel.spec --distpath=dist --buildpath=build
+REM Run PyInstaller using python -m
+python -m PyInstaller marvel.spec --distpath=dist --buildpath=build
 
 if errorlevel 1 (
     echo.
