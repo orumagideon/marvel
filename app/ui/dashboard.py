@@ -51,6 +51,8 @@ class MarvelDashboard(ctk.CTk):
         self.hedge_password_var = ctk.StringVar(value="")
         self.hedge_server_var = ctk.StringVar(value="")
         self.hedge_remember_var = ctk.BooleanVar(value=True)
+
+        self.auto_connect_var = ctk.BooleanVar(value=self.config.get("ui.auto_connect_on_startup", True))
         
         # Configure grid
         self.grid_rowconfigure(0, weight=1)
@@ -61,6 +63,9 @@ class MarvelDashboard(ctk.CTk):
         
         # Start background updates
         self._start_update_loop()
+
+        # Attempt auto-connect after the UI is visible
+        self.after(750, self._auto_connect_saved_instances)
         
         self.logger.info("Marvel Dashboard initialized")
     
@@ -183,6 +188,20 @@ class MarvelDashboard(ctk.CTk):
 
         self._load_saved_credentials()
 
+        ctk.CTkCheckBox(
+            login_panel,
+            text="Auto-connect on startup",
+            variable=self.auto_connect_var,
+            font=("Arial", 10)
+        ).grid(row=2, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(
+            login_panel,
+            text="Saved credentials will be reused if available.",
+            font=("Arial", 9),
+            text_color="#666666"
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 10))
+
     def _create_login_card(
         self,
         parent,
@@ -281,6 +300,45 @@ class MarvelDashboard(ctk.CTk):
                 self.hedge_terminal_var.set(hedge_saved.get("terminal_path", self.hedge_terminal_var.get()))
         except Exception as e:
             self.logger.debug(f"Failed to load saved credentials: {str(e)}")
+
+    def _auto_connect_saved_instances(self) -> None:
+        """Automatically connect saved MT5 instances after startup if enabled."""
+        try:
+            self.config.set("ui.auto_connect_on_startup", self.auto_connect_var.get())
+
+            if not self.auto_connect_var.get():
+                return
+
+            maven_saved = self.credentials_vault.get_account("dashboard_maven_login") or {}
+            hedge_saved = self.credentials_vault.get_account("dashboard_hedge_login") or {}
+
+            if maven_saved.get("account_number") and maven_saved.get("password") and maven_saved.get("server"):
+                self._connect_instance(
+                    instance_type=MT5InstanceType.MAVEN_FLEET,
+                    terminal_path=maven_saved.get("terminal_path", self.maven_terminal_var.get()).strip(),
+                    account_text=str(maven_saved.get("account_number", "")).strip(),
+                    password=maven_saved.get("password", ""),
+                    server=maven_saved.get("server", "").strip(),
+                    status_label=self.maven_login_card._status_label,  # type: ignore[attr-defined]
+                    success_prefix="Maven",
+                    remember=True,
+                    credential_id="dashboard_maven_login"
+                )
+
+            if hedge_saved.get("account_number") and hedge_saved.get("password") and hedge_saved.get("server"):
+                self._connect_instance(
+                    instance_type=MT5InstanceType.HEDGE_ACCOUNT,
+                    terminal_path=hedge_saved.get("terminal_path", self.hedge_terminal_var.get()).strip(),
+                    account_text=str(hedge_saved.get("account_number", "")).strip(),
+                    password=hedge_saved.get("password", ""),
+                    server=hedge_saved.get("server", "").strip(),
+                    status_label=self.hedge_login_card._status_label,  # type: ignore[attr-defined]
+                    success_prefix="Hedge",
+                    remember=True,
+                    credential_id="dashboard_hedge_login"
+                )
+        except Exception as e:
+            self.logger.debug(f"Auto-connect failed: {str(e)}")
 
     def _persist_credentials(
         self,

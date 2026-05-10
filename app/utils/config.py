@@ -53,7 +53,8 @@ class SystemConfig:
             "refresh_rate_ms": 100,
             "market_feed_refresh_ms": 150,
             "window_width": 1600,
-            "window_height": 900
+            "window_height": 900,
+            "auto_connect_on_startup": True
         },
         "logging": {
             "log_directory": "logs",
