@@ -140,28 +140,34 @@ class TradingControlsWidget(ctk.CTkFrame):
         super().__init__(parent, fg_color="#1a1a1a", **kwargs)
 
         self.command_callback = command_callback
+        self.grid_columnconfigure(0, weight=1)
 
         # Symbol input
         symbol_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        symbol_frame.pack(fill="x", padx=20, pady=(10, 6))
+        symbol_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(10, 6))
+        symbol_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(symbol_frame, text="Symbol:", font=("Arial", 11), text_color="#888").pack(side="left")
+        ctk.CTkLabel(symbol_frame, text="Symbol:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
         self.symbol_var = ctk.StringVar(value="US100")
-        self.symbol_input = ctk.CTkEntry(symbol_frame, textvariable=self.symbol_var, width=130)
-        self.symbol_input.pack(side="left", padx=10)
+        self.symbol_input = ctk.CTkEntry(symbol_frame, textvariable=self.symbol_var)
+        self.symbol_input.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         
         # Lot size input
         lot_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        lot_frame.pack(fill="x", padx=20, pady=(6, 10))
+        lot_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 10))
+        lot_frame.grid_columnconfigure(1, weight=1)
         
-        ctk.CTkLabel(lot_frame, text="Lot Size:", font=("Arial", 11), text_color="#888").pack(side="left")
+        ctk.CTkLabel(lot_frame, text="Lot Size:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
         self.lot_var = ctk.StringVar(value="0.1")
-        self.lot_input = ctk.CTkEntry(lot_frame, textvariable=self.lot_var, width=100)
-        self.lot_input.pack(side="left", padx=10)
+        self.lot_input = ctk.CTkEntry(lot_frame, textvariable=self.lot_var)
+        self.lot_input.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         
         # BUY / SELL buttons
         button_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        button_frame.pack(fill="x", padx=20, pady=10)
+        button_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=10)
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+        button_frame.grid_columnconfigure(2, weight=1)
         
         buy_btn = ctk.CTkButton(
             button_frame,
@@ -171,7 +177,7 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#00ff00",
             command=lambda: self.command_callback("buy")
         )
-        buy_btn.pack(side="left", padx=5, fill="x", expand=True)
+        buy_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         
         sell_btn = ctk.CTkButton(
             button_frame,
@@ -181,7 +187,7 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#ff0000",
             command=lambda: self.command_callback("sell")
         )
-        sell_btn.pack(side="left", padx=5, fill="x", expand=True)
+        sell_btn.grid(row=0, column=1, sticky="ew", padx=6)
         
         # Emergency close
         close_btn = ctk.CTkButton(
@@ -192,11 +198,13 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#888888",
             command=lambda: self.command_callback("close_all")
         )
-        close_btn.pack(side="left", padx=5, fill="x", expand=True)
+        close_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
         
         # Feature toggles
         toggle_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        toggle_frame.pack(fill="x", padx=20, pady=10)
+        toggle_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=10)
+        toggle_frame.grid_columnconfigure(0, weight=1)
+        toggle_frame.grid_columnconfigure(1, weight=1)
         
         self.hedge_var = ctk.BooleanVar(value=True)
         hedge_check = ctk.CTkCheckBox(
@@ -206,7 +214,7 @@ class TradingControlsWidget(ctk.CTkFrame):
             font=("Arial", 11, "bold"),
             command=lambda: self.command_callback("toggle_hedge")
         )
-        hedge_check.pack(side="left", padx=8)
+        hedge_check.grid(row=0, column=0, sticky="w", padx=(0, 8))
         
         self.recovery_var = ctk.BooleanVar(value=True)
         recovery_check = ctk.CTkCheckBox(
@@ -216,30 +224,33 @@ class TradingControlsWidget(ctk.CTkFrame):
             font=("Arial", 11, "bold"),
             command=lambda: self.command_callback("toggle_recovery")
         )
-        recovery_check.pack(side="left", padx=8)
+        recovery_check.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         # Recovery / TP/SL controls
         recovery_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        recovery_frame.pack(fill="x", padx=20, pady=(6, 12))
+        recovery_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(6, 12))
+        recovery_frame.grid_columnconfigure(1, weight=1)
+        recovery_frame.grid_columnconfigure(3, weight=1)
 
-        ctk.CTkLabel(recovery_frame, text="TP (pips):", font=("Arial", 10), text_color="#888").pack(side="left")
+        ctk.CTkLabel(recovery_frame, text="TP (pips):", font=("Arial", 10), text_color="#888").grid(row=0, column=0, sticky="w")
         self.tp_var = ctk.StringVar(value="10")
-        self.tp_input = ctk.CTkEntry(recovery_frame, textvariable=self.tp_var, width=70)
-        self.tp_input.pack(side="left", padx=6)
+        self.tp_input = ctk.CTkEntry(recovery_frame, textvariable=self.tp_var)
+        self.tp_input.grid(row=0, column=1, sticky="ew", padx=(6, 12))
 
-        ctk.CTkLabel(recovery_frame, text="SL (pips):", font=("Arial", 10), text_color="#888").pack(side="left", padx=(10,0))
+        ctk.CTkLabel(recovery_frame, text="SL (pips):", font=("Arial", 10), text_color="#888").grid(row=0, column=2, sticky="w")
         self.sl_var = ctk.StringVar(value="20")
-        self.sl_input = ctk.CTkEntry(recovery_frame, textvariable=self.sl_var, width=70)
-        self.sl_input.pack(side="left", padx=6)
+        self.sl_input = ctk.CTkEntry(recovery_frame, textvariable=self.sl_var)
+        self.sl_input.grid(row=0, column=3, sticky="ew", padx=(6, 12))
 
         calc_btn = ctk.CTkButton(recovery_frame, text="Calculate Recovery", command=lambda: self.command_callback("calc_recovery"))
-        calc_btn.pack(side="right")
+        calc_btn.grid(row=0, column=4, sticky="e")
 
         # Recovery estimate display
         estimate_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        estimate_frame.pack(fill="x", padx=20, pady=(0, 10))
+        estimate_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 10))
+        estimate_frame.grid_columnconfigure(0, weight=1)
         self.estimate_label = ctk.CTkLabel(estimate_frame, text="Est Hedge Lot: - | Target: $-", font=("Arial", 10), text_color="#00ff88")
-        self.estimate_label.pack(side="left")
+        self.estimate_label.grid(row=0, column=0, sticky="w")
     
     def get_lot_size(self) -> float:
         """Get current lot size"""

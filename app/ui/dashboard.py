@@ -53,6 +53,8 @@ class MarvelDashboard(ctk.CTk):
         self.hedge_remember_var = ctk.BooleanVar(value=True)
 
         self.auto_connect_var = ctk.BooleanVar(value=self.config.get("ui.auto_connect_on_startup", True))
+        self._resize_after_id = None
+        self._layout_mode = None
         
         # Configure grid
         self.grid_rowconfigure(0, weight=1)
@@ -64,6 +66,9 @@ class MarvelDashboard(ctk.CTk):
         # Start background updates
         self._start_update_loop()
 
+        # Keep the dashboard responsive as the window resizes
+        self.bind("<Configure>", self._on_window_configure)
+
         # Attempt auto-connect after the UI is visible
         self.after(750, self._auto_connect_saved_instances)
         
@@ -73,31 +78,91 @@ class MarvelDashboard(ctk.CTk):
         """Create main dashboard layout"""
         
         # Main container
-        main_container = ctk.CTkFrame(self, fg_color="#0a0a0a")
-        main_container.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        main_container.grid_rowconfigure(2, weight=1)
-        main_container.grid_columnconfigure(0, weight=1)
+        self.main_container = ctk.CTkFrame(self, fg_color="#0a0a0a")
+        self.main_container.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        self.main_container.grid_rowconfigure(2, weight=1)
+        self.main_container.grid_columnconfigure(0, weight=1)
         
         # === HEADER ===
-        self._create_header(main_container)
+        self._create_header(self.main_container)
 
         # === LOGIN PANEL ===
-        self._create_login_panel(main_container)
+        self._create_login_panel(self.main_container)
         
         # === MAIN CONTENT AREA ===
-        content_frame = ctk.CTkFrame(main_container, fg_color="#0a0a0a")
-        content_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
-        content_frame.grid_rowconfigure(0, weight=1)
-        content_frame.grid_columnconfigure(0, weight=1)
-        content_frame.grid_columnconfigure(1, weight=1)
+        self.content_frame = ctk.CTkFrame(self.main_container, fg_color="#0a0a0a")
+        self.content_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(1, weight=1)
         
         # Left Panel: Market & Health
-        left_panel = self._create_left_panel(content_frame)
-        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        self.left_panel = self._create_left_panel(self.content_frame)
+        self.left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
         # Right Panel: Controls & Accounts
-        right_panel = self._create_right_panel(content_frame)
-        right_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        self.right_panel = self._create_right_panel(self.content_frame)
+        self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+
+        self._apply_responsive_layout()
+
+    def _on_window_configure(self, event) -> None:
+        """Debounce layout recalculation on resize."""
+        try:
+            if event.widget is not self:
+                return
+            if self._resize_after_id is not None:
+                self.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.after(100, self._apply_responsive_layout)
+        except Exception:
+            pass
+
+    def _apply_responsive_layout(self) -> None:
+        """Switch between wide and compact dashboard layouts."""
+        try:
+            width = self.winfo_width() or self.winfo_reqwidth() or 1600
+            compact = width < 1400
+            layout_mode = "compact" if compact else "wide"
+
+            if layout_mode == self._layout_mode:
+                return
+
+            self._layout_mode = layout_mode
+
+            # Login panel layout
+            self.main_container.grid_rowconfigure(1, weight=0)
+            if compact:
+                self.main_container.grid_rowconfigure(2, weight=1)
+                self.main_container.grid_columnconfigure(0, weight=1)
+                self.login_panel.grid_columnconfigure(0, weight=1)
+                self.login_panel.grid_columnconfigure(1, weight=0)
+                self.maven_login_card.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
+                self.hedge_login_card.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 12))
+
+                # Stack the main panels vertically
+                self.content_frame.grid_rowconfigure(0, weight=1)
+                self.content_frame.grid_rowconfigure(1, weight=1)
+                self.content_frame.grid_columnconfigure(0, weight=1)
+                self.content_frame.grid_columnconfigure(1, weight=0)
+                self.left_panel.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 10))
+                self.right_panel.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+            else:
+                self.main_container.grid_rowconfigure(2, weight=1)
+                self.main_container.grid_columnconfigure(0, weight=1)
+                self.login_panel.grid_columnconfigure(0, weight=1)
+                self.login_panel.grid_columnconfigure(1, weight=1)
+                self.maven_login_card.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 12))
+                self.hedge_login_card.grid(row=1, column=1, sticky="nsew", padx=10, pady=(0, 12))
+
+                # Restore side-by-side main panels
+                self.content_frame.grid_rowconfigure(0, weight=1)
+                self.content_frame.grid_rowconfigure(1, weight=0)
+                self.content_frame.grid_columnconfigure(0, weight=1)
+                self.content_frame.grid_columnconfigure(1, weight=1)
+                self.left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=0)
+                self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=0)
+        except Exception as e:
+            self.logger.debug(f"Responsive layout update failed: {str(e)}")
     
     def _create_header(self, parent) -> None:
         """Create header with title and connection status"""
@@ -139,13 +204,15 @@ class MarvelDashboard(ctk.CTk):
 
     def _create_login_panel(self, parent) -> None:
         """Create MT5 login panel for Maven and hedge accounts"""
-        login_panel = ctk.CTkFrame(parent, fg_color="#111111")
-        login_panel.grid(row=1, column=0, sticky="ew", padx=10, pady=(10, 0))
-        login_panel.grid_columnconfigure(0, weight=1)
-        login_panel.grid_columnconfigure(1, weight=1)
+        self.login_panel = ctk.CTkFrame(parent, fg_color="#111111")
+        self.login_panel.grid(row=1, column=0, sticky="ew", padx=10, pady=(10, 0))
+        self.login_panel.grid_columnconfigure(0, weight=1)
+        self.login_panel.grid_columnconfigure(1, weight=1)
+        self.login_panel.grid_rowconfigure(1, weight=1)
+        self.login_panel.grid_rowconfigure(2, weight=1)
 
         title = ctk.CTkLabel(
-            login_panel,
+            self.login_panel,
             text="MT5 LOGIN",
             font=("Arial", 12, "bold"),
             text_color="#00ff88"
@@ -153,7 +220,7 @@ class MarvelDashboard(ctk.CTk):
         title.grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 6))
 
         self.maven_login_status_label = ctk.CTkLabel(
-            login_panel,
+            self.login_panel,
             text="Maven: disconnected",
             font=("Arial", 10),
             text_color="#888888"
@@ -161,7 +228,7 @@ class MarvelDashboard(ctk.CTk):
         self.maven_login_status_label.grid(row=0, column=1, sticky="e", padx=15, pady=(10, 6))
 
         self.hedge_login_status_label = ctk.CTkLabel(
-            login_panel,
+            self.login_panel,
             text="Hedge: disconnected",
             font=("Arial", 10),
             text_color="#888888"
@@ -169,7 +236,7 @@ class MarvelDashboard(ctk.CTk):
         self.hedge_login_status_label.grid(row=0, column=0, sticky="w", padx=15, pady=(10, 6))
 
         self.maven_login_card = self._create_login_card(
-            login_panel,
+            self.login_panel,
             title_text="MAVEN FLEET LOGIN",
             row=1,
             column=0,
@@ -182,7 +249,7 @@ class MarvelDashboard(ctk.CTk):
         )
 
         self.hedge_login_card = self._create_login_card(
-            login_panel,
+            self.login_panel,
             title_text="PERSONAL HEDGE LOGIN",
             row=1,
             column=1,
@@ -197,14 +264,14 @@ class MarvelDashboard(ctk.CTk):
         self._load_saved_credentials()
 
         ctk.CTkCheckBox(
-            login_panel,
+            self.login_panel,
             text="Auto-connect on startup",
             variable=self.auto_connect_var,
             font=("Arial", 10)
         ).grid(row=2, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 8))
 
         ctk.CTkLabel(
-            login_panel,
+            self.login_panel,
             text="Saved credentials are stored in the encrypted vault and can auto-connect on startup.",
             font=("Arial", 9),
             text_color="#666666"

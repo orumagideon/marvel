@@ -19,7 +19,6 @@ a = Analysis(
     datas=[
         ('app', 'app'),
         ('data', 'data'),
-        ('logs', 'logs'),
         ('requirements.txt', '.'),
     ],
     hiddenimports=[
@@ -48,8 +47,9 @@ pyz = PYZ(
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     name='MarvelTradingDashboard',
     debug=False,
     bootloader_ignore_signals=False,
@@ -62,15 +62,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=icon_path,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='MarvelTradingDashboard',
 )

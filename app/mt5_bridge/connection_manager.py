@@ -10,6 +10,7 @@ import time
 from typing import Optional, Dict, Any
 from enum import Enum
 from datetime import datetime
+from pathlib import Path
 from app.utils.logger import get_logger
 from app.utils.constants import (
     MT5_MAX_RETRIES, MT5_RETRY_DELAY, MT5_CONNECTION_TIMEOUT, MT5_LATENCY_THRESHOLD
@@ -35,10 +36,14 @@ class MT5ConnectionManager:
     """
     Manages dual MT5 terminal instances with automatic reconnection.
     Ensures Maven switching doesn't affect persistent hedge connection.
+    
+    CRITICAL: MT5 is a global module that can only be initialized ONCE.
+    This manager handles account switching via mt5.login() without re-initializing.
     """
     
     def __init__(self):
         self.logger = get_logger()
+        self.is_mt5_initialized = False  # Track global MT5 initialization state
         self.instances: Dict[MT5InstanceType, Dict[str, Any]] = {
             MT5InstanceType.MAVEN_FLEET: {
                 "state": ConnectionState.DISCONNECTED,
@@ -61,10 +66,41 @@ class MT5ConnectionManager:
             MT5InstanceType.MAVEN_FLEET: 0,
             MT5InstanceType.HEDGE_ACCOUNT: 0
         }
+
+    def _resolve_terminal_path(self, terminal_path: str) -> Optional[str]:
+        """Resolve a folder path to the MetaTrader terminal executable path."""
+        if not terminal_path:
+            return None
+
+        raw_path = terminal_path.strip().strip('"')
+        path = Path(raw_path)
+
+        if path.is_file():
+            return str(path)
+
+        if path.is_dir():
+            candidates = [
+                path / "terminal64.exe",
+                path / "terminal.exe",
+                path / "metatrader64.exe",
+                path / "metatrader.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+
+            exe_candidates = sorted(path.glob("terminal*.exe"))
+            if exe_candidates:
+                return str(exe_candidates[0])
+
+        return str(path)
     
     def initialize(self, instance_type: MT5InstanceType, terminal_path: str) -> bool:
         """
         Initialize MT5 terminal instance
+        
+        CRITICAL: MT5.initialize() can only be called ONCE globally.
+        This method initializes MT5 on first call, then uses mt5.login() for subsequent calls.
         
         Args:
             instance_type: MAVEN_FLEET or HEDGE_ACCOUNT
@@ -74,22 +110,54 @@ class MT5ConnectionManager:
             True if successful, False otherwise
         """
         try:
-            self.instances[instance_type]["state"] = ConnectionState.CONNECTING
-            self.instances[instance_type]["terminal_path"] = terminal_path
-            
-            # Initialize MT5
-            if not mt5.initialize(path=terminal_path):
-                error_msg = f"MT5 initialization failed for {instance_type.value}"
+            resolved_terminal_path = self._resolve_terminal_path(terminal_path)
+            if not resolved_terminal_path:
+                error_msg = "MT5 terminal path is empty or invalid"
                 self.instances[instance_type]["last_error"] = error_msg
                 self.instances[instance_type]["state"] = ConnectionState.ERROR
                 self.logger.log_connection(instance_type.value, "failed", error_msg)
                 return False
+
+            self.instances[instance_type]["state"] = ConnectionState.CONNECTING
+            self.instances[instance_type]["terminal_path"] = resolved_terminal_path
             
+            # Check if MT5 is already initialized globally
+            if self.is_mt5_initialized:
+                # Already initialized, just mark this instance as ready
+                self.instances[instance_type]["state"] = ConnectionState.CONNECTED
+                self.instances[instance_type]["connection_time"] = datetime.now()
+                self.retry_counts[instance_type] = 0
+                self.logger.info(f"[{instance_type.value}] Using existing MT5 initialization")
+                return True
+            
+            # First try to attach to an already running terminal session.
+            # If that fails, fall back to the explicit terminal path.
+            if not mt5.initialize(timeout=MT5_CONNECTION_TIMEOUT * 1000):
+                if not mt5.initialize(path=resolved_terminal_path, timeout=MT5_CONNECTION_TIMEOUT * 1000):
+                    error_msg = (
+                        f"MT5 initialization failed for {instance_type.value} using "
+                        f"{resolved_terminal_path}: {mt5.last_error()}"
+                    )
+                    self.instances[instance_type]["last_error"] = error_msg
+                    self.instances[instance_type]["state"] = ConnectionState.ERROR
+                    self.logger.log_connection(instance_type.value, "failed", error_msg)
+                    return False
+            
+            # Mark MT5 as initialized globally
+            self.is_mt5_initialized = True
             self.instances[instance_type]["state"] = ConnectionState.CONNECTED
             self.instances[instance_type]["connection_time"] = datetime.now()
             self.retry_counts[instance_type] = 0
             
             self.logger.log_connection(instance_type.value, "connected")
+            terminal_info = mt5.terminal_info()
+            if terminal_info:
+                self.logger.info(
+                    f"MT5 initialized successfully with terminal: {resolved_terminal_path} | "
+                    f"connected={terminal_info.connected}, trade_allowed={terminal_info.trade_allowed}"
+                )
+            else:
+                self.logger.info(f"MT5 initialized successfully with terminal: {resolved_terminal_path}")
             return True
             
         except Exception as e:
@@ -106,42 +174,88 @@ class MT5ConnectionManager:
             instance_type: MAVEN_FLEET or HEDGE_ACCOUNT
             account: Account number
             password: Account password
-            server: Server name
+            server: Server name (e.g., "FundedNext-Server3")
         
         Returns:
             True if successful, False otherwise
         """
         try:
+            if not self.is_mt5_initialized:
+                error_msg = "MT5 not initialized. Call initialize() first."
+                self.instances[instance_type]["last_error"] = error_msg
+                self.instances[instance_type]["state"] = ConnectionState.ERROR
+                self.logger.error(f"[{instance_type.value}] {error_msg}")
+                return False
+
+            current_account = None
+            try:
+                acc_info = mt5.account_info()
+                current_account = acc_info.login if acc_info else None
+            except Exception:
+                current_account = None
+
+            if current_account == account:
+                self.instances[instance_type]["account"] = account
+                self.instances[instance_type]["state"] = ConnectionState.CONNECTED
+                self.instances[instance_type]["connection_time"] = datetime.now()
+                self.retry_counts[instance_type] = 0
+                self.logger.info(
+                    f"[{instance_type.value}] Already connected to account {account}; reusing existing terminal session"
+                )
+                return True
+            
             start_time = time.time()
             
             # Attempt login with retries
             for attempt in range(MT5_MAX_RETRIES):
-                if mt5.login(account, password, server):
-                    latency_ms = (time.time() - start_time) * 1000
-                    self.instances[instance_type]["latency_ms"] = latency_ms
-                    self.instances[instance_type]["account"] = account
-                    self.instances[instance_type]["state"] = ConnectionState.CONNECTED
-                    self.retry_counts[instance_type] = 0
+                try:
+                    login_result = mt5.login(account, password=password, server=server)
                     
-                    self.logger.info(
-                        f"[{instance_type.value}] Login successful - "
-                        f"Account: {account}, Latency: {latency_ms:.2f}ms"
-                    )
-                    return True
+                    if login_result:
+                        latency_ms = (time.time() - start_time) * 1000
+                        self.instances[instance_type]["latency_ms"] = latency_ms
+                        self.instances[instance_type]["account"] = account
+                        self.instances[instance_type]["state"] = ConnectionState.CONNECTED
+                        self.retry_counts[instance_type] = 0
+                        
+                        self.logger.info(
+                            f"[{instance_type.value}] Login successful - "
+                            f"Account: {account}, Server: {server}, Latency: {latency_ms:.2f}ms"
+                        )
+                        return True
+                    else:
+                        # Get detailed error from MT5
+                        mt5_error = mt5.last_error()
+                        error_code, error_msg = mt5_error if mt5_error else (None, "Unknown error")
+                        self.logger.debug(
+                            f"[{instance_type.value}] Login attempt {attempt + 1}/{MT5_MAX_RETRIES} failed - "
+                            f"Error: {error_code}: {error_msg}"
+                        )
+                        
+                        if attempt < MT5_MAX_RETRIES - 1:
+                            time.sleep(MT5_RETRY_DELAY)
                 
-                if attempt < MT5_MAX_RETRIES - 1:
-                    time.sleep(MT5_RETRY_DELAY)
+                except Exception as e:
+                    self.logger.debug(f"[{instance_type.value}] Login attempt {attempt + 1} exception: {str(e)}")
+                    if attempt < MT5_MAX_RETRIES - 1:
+                        time.sleep(MT5_RETRY_DELAY)
             
-            # All retries failed
-            error_msg = f"Login failed after {MT5_MAX_RETRIES} attempts for account {account}"
+            # All retries failed - build detailed error message
+            mt5_error = mt5.last_error()
+            error_code, error_details = mt5_error if mt5_error else (None, "Unknown error")
+            error_msg = (
+                f"Login failed after {MT5_MAX_RETRIES} attempts for account {account} "
+                f"on server {server}. MT5 Error: {error_code}: {error_details}"
+            )
             self.instances[instance_type]["last_error"] = error_msg
             self.instances[instance_type]["state"] = ConnectionState.ERROR
             self.logger.log_connection(instance_type.value, "login_failed", error_msg)
             return False
             
         except Exception as e:
+            error_msg = f"Unexpected error during login: {str(e)}"
             self.instances[instance_type]["state"] = ConnectionState.ERROR
-            self.instances[instance_type]["last_error"] = str(e)
+            self.instances[instance_type]["last_error"] = error_msg
             self.logger.log_error(e, f"Login error ({instance_type.value})")
             return False
     
@@ -237,7 +351,12 @@ class MT5ConnectionManager:
         }
     
     def shutdown(self, instance_type: MT5InstanceType) -> None:
-        """Shutdown instance connection"""
+        """
+        Shutdown instance connection
+        
+        Note: MT5.shutdown() affects the entire MT5 module globally,
+        but we only mark this specific instance as disconnected.
+        """
         try:
             # Note: MT5.shutdown() affects the entire MT5 module, not just one instance
             # In production with separate terminal instances, this would properly isolate
@@ -245,6 +364,17 @@ class MT5ConnectionManager:
             self.logger.log_connection(instance_type.value, "shutdown")
         except Exception as e:
             self.logger.log_error(e, f"Shutdown error ({instance_type.value})")
+    
+    def shutdown_all(self) -> None:
+        """Shutdown all connections"""
+        try:
+            mt5.shutdown()
+            self.is_mt5_initialized = False  # Reset global initialization state
+            for instance_type in MT5InstanceType:
+                self.instances[instance_type]["state"] = ConnectionState.DISCONNECTED
+            self.logger.info("All MT5 connections shutdown")
+        except Exception as e:
+            self.logger.log_error(e, "Shutdown all error")
     
     def shutdown_all(self) -> None:
         """Shutdown all connections"""
