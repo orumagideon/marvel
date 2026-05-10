@@ -203,20 +203,43 @@ class TradingControlsWidget(ctk.CTkFrame):
             toggle_frame,
             text="Hedge Enabled",
             variable=self.hedge_var,
-            font=("Arial", 10),
+            font=("Arial", 11, "bold"),
             command=lambda: self.command_callback("toggle_hedge")
         )
-        hedge_check.pack(side="left", padx=5)
+        hedge_check.pack(side="left", padx=8)
         
         self.recovery_var = ctk.BooleanVar(value=True)
         recovery_check = ctk.CTkCheckBox(
             toggle_frame,
             text="Auto Recovery",
             variable=self.recovery_var,
-            font=("Arial", 10),
+            font=("Arial", 11, "bold"),
             command=lambda: self.command_callback("toggle_recovery")
         )
-        recovery_check.pack(side="left", padx=5)
+        recovery_check.pack(side="left", padx=8)
+
+        # Recovery / TP/SL controls
+        recovery_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
+        recovery_frame.pack(fill="x", padx=20, pady=(6, 12))
+
+        ctk.CTkLabel(recovery_frame, text="TP (pips):", font=("Arial", 10), text_color="#888").pack(side="left")
+        self.tp_var = ctk.StringVar(value="10")
+        self.tp_input = ctk.CTkEntry(recovery_frame, textvariable=self.tp_var, width=70)
+        self.tp_input.pack(side="left", padx=6)
+
+        ctk.CTkLabel(recovery_frame, text="SL (pips):", font=("Arial", 10), text_color="#888").pack(side="left", padx=(10,0))
+        self.sl_var = ctk.StringVar(value="20")
+        self.sl_input = ctk.CTkEntry(recovery_frame, textvariable=self.sl_var, width=70)
+        self.sl_input.pack(side="left", padx=6)
+
+        calc_btn = ctk.CTkButton(recovery_frame, text="Calculate Recovery", command=lambda: self.command_callback("calc_recovery"))
+        calc_btn.pack(side="right")
+
+        # Recovery estimate display
+        estimate_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
+        estimate_frame.pack(fill="x", padx=20, pady=(0, 10))
+        self.estimate_label = ctk.CTkLabel(estimate_frame, text="Est Hedge Lot: - | Target: $-", font=("Arial", 10), text_color="#00ff88")
+        self.estimate_label.pack(side="left")
     
     def get_lot_size(self) -> float:
         """Get current lot size"""
@@ -229,6 +252,25 @@ class TradingControlsWidget(ctk.CTkFrame):
         """Get the trade symbol entered by the user."""
         symbol = self.symbol_var.get().strip().upper().replace(" ", "")
         return symbol or "US100"
+
+    def get_tp_sl(self) -> tuple:
+        """Return TP and SL in pips as floats."""
+        try:
+            tp = float(self.tp_var.get())
+        except Exception:
+            tp = 10.0
+        try:
+            sl = float(self.sl_var.get())
+        except Exception:
+            sl = 20.0
+        return tp, sl
+
+    def set_recovery_estimate(self, lot: float, target: float) -> None:
+        """Update the UI with recovery estimate values."""
+        try:
+            self.estimate_label.configure(text=f"Est Hedge Lot: {lot:.2f}L | Target: ${target:.2f}")
+        except Exception:
+            pass
 
 
 class AccountGridWidget(ctk.CTkFrame):
@@ -280,10 +322,42 @@ class AccountGridWidget(ctk.CTkFrame):
             text_color="#888"
         )
         acc_label.pack(side="left", padx=10)
-        
+
+        # keep references for updates
+        slot_frame._acc_label = acc_label
+        slot_frame._active_var = active_var
+        slot_frame._active_check = active_check
+
         self.account_widgets[slot_id] = slot_frame
     
-    def refresh_accounts(self) -> None:
+    def refresh_accounts(self, mt5_manager=None) -> None:
         """Refresh account display"""
-        # Update implementation here
-        pass
+        try:
+            for slot_id, slot_frame in sorted(self.account_widgets.items()):
+                account = self.account_manager.get_account(slot_id)
+                if account:
+                    acc_text = f"Account: {account.account_number}"
+                    phase_text = f"({account.phase.value})"
+                    # Attempt to fetch live balance if MT5 is available via account manager vault proxy
+                    balance_text = ""
+                    try:
+                        # If the vault stored credentials we can try to fetch a quick balance via account manager vault key
+                        creds = self.account_manager.get_account_credentials(slot_id)
+                        if creds:
+                            # The actual balance fetch requires MT5 manager; leave balance blank here
+                            balance_text = ""
+                    except Exception:
+                        balance_text = ""
+
+                    display = f"{acc_text} {phase_text} {balance_text}".strip()
+                    try:
+                        slot_frame._acc_label.configure(text=display)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        slot_frame._acc_label.configure(text="Not configured")
+                    except Exception:
+                        pass
+        except Exception:
+            pass

@@ -160,6 +160,14 @@ class MarvelDashboard(ctk.CTk):
         )
         self.maven_login_status_label.grid(row=0, column=1, sticky="e", padx=15, pady=(10, 6))
 
+        self.hedge_login_status_label = ctk.CTkLabel(
+            login_panel,
+            text="Hedge: disconnected",
+            font=("Arial", 10),
+            text_color="#888888"
+        )
+        self.hedge_login_status_label.grid(row=0, column=0, sticky="w", padx=15, pady=(10, 6))
+
         self.maven_login_card = self._create_login_card(
             login_panel,
             title_text="MAVEN FLEET LOGIN",
@@ -456,6 +464,52 @@ class MarvelDashboard(ctk.CTk):
 
             self.maven_status.set_status(maven_status.get("state", ConnectionState.DISCONNECTED.value))
             self.hedge_status.set_status(hedge_status.get("state", ConnectionState.DISCONNECTED.value))
+            # If connected, fetch account info and display balance/account
+            try:
+                if maven_status.get("state") == ConnectionState.CONNECTED.value:
+                    acc = self.system.mt5_manager.get_account_info(MT5InstanceType.MAVEN_FLEET) or {}
+                    login = acc.get("login") or acc.get("account") or acc.get("account_number") or "-"
+                    bal = acc.get("balance")
+                    curr = acc.get("currency", "")
+                    bal_text = f"{float(bal):,.2f} {curr}" if bal is not None else "-"
+                    try:
+                        self.maven_login_status_label.configure(text=f"Maven: {login} | {bal_text}", text_color="#00ff88")
+                    except Exception:
+                        pass
+                    try:
+                        self.maven_login_card._status_label.configure(text=f"Acct {login} | Balance: {bal_text}", text_color="#00ff88")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.maven_login_status_label.configure(text="Maven: disconnected", text_color="#888888")
+                    except Exception:
+                        pass
+
+                if hedge_status.get("state") == ConnectionState.CONNECTED.value:
+                    acc = self.system.mt5_manager.get_account_info(MT5InstanceType.HEDGE_ACCOUNT) or {}
+                    login = acc.get("login") or acc.get("account") or acc.get("account_number") or "-"
+                    bal = acc.get("balance")
+                    curr = acc.get("currency", "")
+                    bal_text = f"{float(bal):,.2f} {curr}" if bal is not None else "-"
+                    try:
+                        self.hedge_login_card._status_label.configure(text=f"Acct {login} | Balance: {bal_text}", text_color="#00ff88")
+                    except Exception:
+                        pass
+                    try:
+                        self.hedge_login_status = getattr(self, "hedge_login_status_label", None)
+                        if self.hedge_login_status:
+                            self.hedge_login_status.configure(text=f"Hedge: {login} | {bal_text}", text_color="#00ff88")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.hedge_login_card._status_label.configure(text="Disconnected", text_color="#888888")
+                    except Exception:
+                        pass
+            except Exception:
+                # Non-fatal: continue with status dots only
+                pass
         except Exception as e:
             self.logger.debug(f"Status refresh error: {str(e)}")
     
@@ -524,34 +578,47 @@ class MarvelDashboard(ctk.CTk):
     def _on_trade_command(self, command: str, *args, **kwargs) -> None:
         """Handle trading command from UI"""
         if command == "buy":
-            asyncio.run(self._execute_buy())
+            tp, sl = self.trading_controls.get_tp_sl()
+            asyncio.run(self._execute_buy(tp, sl))
         elif command == "sell":
-            asyncio.run(self._execute_sell())
+            tp, sl = self.trading_controls.get_tp_sl()
+            asyncio.run(self._execute_sell(tp, sl))
         elif command == "close_all":
             asyncio.run(self._close_all())
         elif command == "toggle_hedge":
             self.system.hedge_enabled = not self.system.hedge_enabled
         elif command == "toggle_recovery":
             self.system.auto_recovery_enabled = not self.system.auto_recovery_enabled
+        elif command == "calc_recovery":
+            # Calculate recovery estimate and update controls
+            try:
+                lot, target = self.system.get_recovery_target()
+            except Exception:
+                lot, target = (0.0, 0.0)
+
+            try:
+                self.trading_controls.set_recovery_estimate(lot, target)
+            except Exception:
+                pass
     
-    async def _execute_buy(self) -> None:
+    async def _execute_buy(self, tp_pips: float = None, sl_pips: float = None) -> None:
         """Execute BUY order"""
         lot_size = self.trading_controls.get_lot_size()
         symbol = self.trading_controls.get_symbol()
         
-        success, results = await self.system.execute_buy_order(symbol, lot_size)
+        success, results = await self.system.execute_buy_order(symbol, lot_size, tp_pips=tp_pips, sl_pips=sl_pips)
         
         if success:
             self.logger.info(f"BUY executed: {results.get('success_count')} accounts")
         else:
             self.logger.error(f"BUY failed: {results.get('error', 'Unknown error')}")
     
-    async def _execute_sell(self) -> None:
+    async def _execute_sell(self, tp_pips: float = None, sl_pips: float = None) -> None:
         """Execute SELL order"""
         lot_size = self.trading_controls.get_lot_size()
         symbol = self.trading_controls.get_symbol()
         
-        success, results = await self.system.execute_sell_order(symbol, lot_size)
+        success, results = await self.system.execute_sell_order(symbol, lot_size, tp_pips=tp_pips, sl_pips=sl_pips)
         
         if success:
             self.logger.info(f"SELL executed: {results.get('success_count')} accounts")
@@ -580,7 +647,7 @@ class MarvelDashboard(ctk.CTk):
                     self._refresh_connection_status()
                     
                     # Update account grid
-                    self.account_grid.refresh_accounts()
+                    self.account_grid.refresh_accounts(self.system.mt5_manager)
                     
                     threading.Event().wait(0.5)
                 except Exception as e:

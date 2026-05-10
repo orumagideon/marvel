@@ -44,9 +44,49 @@ echo.
 echo [4/5] Building executable...
 echo NOTE: This may take 2-5 minutes...
 echo.
+REM Enable delayed expansion for safer variable handling in loops
+setlocal ENABLEDELAYEDEXPANSION
 
-REM Remove old build
-if exist dist\Marvel rmdir /s /q dist\Marvel
+REM Ensure no running instance is locking files. Attempt graceful then force kill.
+echo Checking for running MarvelTradingDashboard.exe and attempting to stop it...
+tasklist /FI "IMAGENAME eq MarvelTradingDashboard.exe" 2>NUL | find /I "MarvelTradingDashboard.exe" >NUL
+if errorlevel 1 (
+    echo No running MarvelTradingDashboard.exe found.
+) else (
+    echo Found running process. Attempting graceful termination...
+    taskkill /IM MarvelTradingDashboard.exe /T >NUL 2>&1
+    timeout /t 2 /nobreak >NUL
+    tasklist /FI "IMAGENAME eq MarvelTradingDashboard.exe" 2>NUL | find /I "MarvelTradingDashboard.exe" >NUL
+    if errorlevel 1 (
+        echo Process terminated.
+    ) else (
+        echo Process still running. Forcing termination...
+        taskkill /F /IM MarvelTradingDashboard.exe /T >NUL 2>&1
+        timeout /t 1 /nobreak >NUL
+    )
+)
+
+REM Remove old build directories (retry on failure)
+set RETRIES=3
+set COUNT=0
+:CLEAN_LOOP
+if exist dist\MarvelTradingDashboard (
+    rmdir /s /q dist\MarvelTradingDashboard >NUL 2>&1
+    if exist dist\MarvelTradingDashboard (
+        set /A COUNT+=1
+        if !COUNT! GEQ !RETRIES! (
+            echo WARNING: Failed to remove dist\MarvelTradingDashboard after !RETRIES! attempts. You may need to close lingering processes or remove the folder manually.
+        ) else (
+            echo Retry removing dist\MarvelTradingDashboard (attempt !COUNT!/!RETRIES!)...
+            timeout /t 1 /nobreak >NUL
+            goto CLEAN_LOOP
+        )
+    ) else (
+        echo Removed old dist\MarvelTradingDashboard folder.
+    )
+)
+endlocal
+
 if exist build rmdir /s /q build
 
 REM Run PyInstaller using python -m

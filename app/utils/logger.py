@@ -5,6 +5,8 @@ Provides rotating file logs with console output for diagnostics and audit trails
 
 import logging
 import os
+import sys
+import platform
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 import json
@@ -13,11 +15,29 @@ from typing import Any, Dict
 
 
 class StructuredLogger:
-    """Structured logging with JSON support for trade execution and diagnostics"""
+    """Structured logging with JSON support for trade execution and diagnostics
+
+    By default logs are written to a user-specific application data folder on
+    Windows to avoid placing runtime logs inside the application/distribution
+    folder (prevents file-locks during packaging). In development (non-frozen)
+    the repository-relative `logs/` directory is used for convenience.
+    """
     
-    def __init__(self, name: str = "marvel", logs_dir: str = "logs"):
-        self.logs_dir = Path(logs_dir)
-        self.logs_dir.mkdir(exist_ok=True)
+    def __init__(self, name: str = "marvel", logs_dir: str = None):
+        # Determine default logs directory when none provided
+        if logs_dir:
+            target = Path(logs_dir)
+        else:
+            # On Windows prefer %APPDATA%\MarvelTradingDashboard\logs
+            if platform.system().lower().startswith("win"):
+                appdata = os.getenv("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+                target = Path(appdata) / "MarvelTradingDashboard" / "logs"
+            else:
+                # Use repo-local logs directory during development on non-Windows
+                target = Path("logs")
+
+        self.logs_dir = target
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.DEBUG)
@@ -105,8 +125,13 @@ class StructuredLogger:
 _logger_instance = None
 
 
-def get_logger(name: str = "marvel", logs_dir: str = "logs") -> StructuredLogger:
-    """Get or create global logger instance"""
+def get_logger(name: str = "marvel", logs_dir: str = None) -> StructuredLogger:
+    """Get or create global logger instance
+
+    Pass `logs_dir` to override the default path. When omitted the logger
+    chooses a safe OS-specific default that avoids writing into the
+    application `dist` folder on Windows.
+    """
     global _logger_instance
     if _logger_instance is None:
         _logger_instance = StructuredLogger(name, logs_dir)

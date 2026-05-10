@@ -74,7 +74,10 @@ class SynchronizedExecutionEngine:
                                         trade_type: TradeType,
                                         maven_accounts: List[Dict[str, Any]],
                                         hedge_instance_info: Dict[str, Any],
-                                        max_slippage_pips: float = SLIPPAGE_THRESHOLD_PIPS) -> Tuple[bool, Dict[str, Any]]:
+                                        max_slippage_pips: float = SLIPPAGE_THRESHOLD_PIPS,
+                                        tp_pips: float = None,
+                                        sl_pips: float = None,
+                                        hedge_lot: float = None) -> Tuple[bool, Dict[str, Any]]:
         """
         Execute synchronized trade: hedge first, then Maven fleet
         
@@ -108,8 +111,9 @@ class SynchronizedExecutionEngine:
             
             # 1. Execute hedge trade first (protection)
             if hedge_instance_info and hedge_instance_info.get('is_active'):
+                hedge_volume = hedge_lot if hedge_lot is not None else lot_size
                 hedge_result = await self._execute_hedge_trade(
-                    symbol, lot_size, trade_type, hedge_instance_info
+                    symbol, hedge_volume, trade_type, hedge_instance_info, tp_pips, sl_pips
                 )
                 execution_results["hedge_execution"] = hedge_result
                 
@@ -126,7 +130,7 @@ class SynchronizedExecutionEngine:
             # 2. Execute Maven fleet trades
             for account in maven_accounts:
                 maven_result = await self._execute_maven_trade(
-                    symbol, lot_size, trade_type, account
+                    symbol, lot_size, trade_type, account, tp_pips, sl_pips
                 )
                 execution_results["maven_executions"].append(maven_result)
                 
@@ -156,7 +160,9 @@ class SynchronizedExecutionEngine:
     
     async def _execute_hedge_trade(self, symbol: str, lot_size: float, 
                                    trade_type: TradeType, 
-                                   hedge_info: Dict[str, Any]) -> Dict[str, Any]:
+                                   hedge_info: Dict[str, Any],
+                                   tp_pips: float = None,
+                                   sl_pips: float = None) -> Dict[str, Any]:
         """Execute hedge trade on Instance B"""
         try:
             start_time = time.time()
@@ -173,6 +179,21 @@ class SynchronizedExecutionEngine:
             # Prepare order
             order_type = mt5.ORDER_TYPE_BUY if trade_type == TradeType.BUY else mt5.ORDER_TYPE_SELL
             price = tick.ask if trade_type == TradeType.BUY else tick.bid
+
+            # compute TP/SL absolute prices if provided (pips -> price)
+            tp_price = None
+            sl_price = None
+            try:
+                sym = mt5.symbol_info(symbol)
+                if sym and sym.point:
+                    pip_mult = 10 if getattr(sym, 'digits', 5) > 4 else 1
+                    if tp_pips is not None:
+                        tp_price = price + (tp_pips * sym.point * pip_mult) if trade_type == TradeType.BUY else price - (tp_pips * sym.point * pip_mult)
+                    if sl_pips is not None:
+                        sl_price = price - (sl_pips * sym.point * pip_mult) if trade_type == TradeType.BUY else price + (sl_pips * sym.point * pip_mult)
+            except Exception:
+                tp_price = None
+                sl_price = None
             
             # Send order
             request = {
@@ -187,6 +208,11 @@ class SynchronizedExecutionEngine:
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_IOC,
             }
+
+            if tp_price is not None:
+                request["tp"] = float(tp_price)
+            if sl_price is not None:
+                request["sl"] = float(sl_price)
             
             result = mt5.order_send(request)
             latency_ms = (time.time() - start_time) * 1000
@@ -232,7 +258,9 @@ class SynchronizedExecutionEngine:
     
     async def _execute_maven_trade(self, symbol: str, lot_size: float,
                                    trade_type: TradeType,
-                                   account: Dict[str, Any]) -> Dict[str, Any]:
+                                   account: Dict[str, Any],
+                                   tp_pips: float = None,
+                                   sl_pips: float = None) -> Dict[str, Any]:
         """Execute trade on Maven account (Instance A)"""
         try:
             start_time = time.time()
@@ -249,6 +277,20 @@ class SynchronizedExecutionEngine:
             # Prepare order
             order_type = mt5.ORDER_TYPE_BUY if trade_type == TradeType.BUY else mt5.ORDER_TYPE_SELL
             price = tick.ask if trade_type == TradeType.BUY else tick.bid
+
+            tp_price = None
+            sl_price = None
+            try:
+                sym = mt5.symbol_info(symbol)
+                if sym and sym.point:
+                    pip_mult = 10 if getattr(sym, 'digits', 5) > 4 else 1
+                    if tp_pips is not None:
+                        tp_price = price + (tp_pips * sym.point * pip_mult) if trade_type == TradeType.BUY else price - (tp_pips * sym.point * pip_mult)
+                    if sl_pips is not None:
+                        sl_price = price - (sl_pips * sym.point * pip_mult) if trade_type == TradeType.BUY else price + (sl_pips * sym.point * pip_mult)
+            except Exception:
+                tp_price = None
+                sl_price = None
             
             # Send order
             request = {
@@ -263,6 +305,11 @@ class SynchronizedExecutionEngine:
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_IOC,
             }
+
+            if tp_price is not None:
+                request["tp"] = float(tp_price)
+            if sl_price is not None:
+                request["sl"] = float(sl_price)
             
             result = mt5.order_send(request)
             latency_ms = (time.time() - start_time) * 1000

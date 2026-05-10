@@ -87,7 +87,7 @@ class MavelCoreSystem:
         return self.risk_manager.get_status(account)
     
     async def execute_buy_order(self, symbol: str, lot_size: float, 
-                               use_hedge: bool = True) -> Tuple[bool, Dict[str, Any]]:
+                               use_hedge: bool = True, tp_pips: float = None, sl_pips: float = None) -> Tuple[bool, Dict[str, Any]]:
         """
         Execute synchronized BUY across active Maven accounts and hedge
         
@@ -102,12 +102,12 @@ class MavelCoreSystem:
         return await self._execute_order(symbol, lot_size, TradeType.BUY, use_hedge)
     
     async def execute_sell_order(self, symbol: str, lot_size: float,
-                                use_hedge: bool = True) -> Tuple[bool, Dict[str, Any]]:
+                                use_hedge: bool = True, tp_pips: float = None, sl_pips: float = None) -> Tuple[bool, Dict[str, Any]]:
         """Execute synchronized SELL across active Maven accounts and hedge"""
-        return await self._execute_order(symbol, lot_size, TradeType.SELL, use_hedge)
+        return await self._execute_order(symbol, lot_size, TradeType.SELL, use_hedge, tp_pips=tp_pips, sl_pips=sl_pips)
     
     async def _execute_order(self, symbol: str, lot_size: float, 
-                            trade_type: TradeType, use_hedge: bool) -> Tuple[bool, Dict[str, Any]]:
+                            trade_type: TradeType, use_hedge: bool, tp_pips: float = None, sl_pips: float = None) -> Tuple[bool, Dict[str, Any]]:
         """Internal order execution with validation"""
         try:
             # Pre-execution validation
@@ -121,11 +121,21 @@ class MavelCoreSystem:
             
             # Build execution parameters
             hedge_info = None
+            hedge_lot_override = None
             if use_hedge and self.hedge_enabled:
                 if self.mt5_manager.is_connected(MT5InstanceType.HEDGE_ACCOUNT):
+                    # If auto-recovery enabled, compute suggested hedge lot and target
+                    if self.auto_recovery_enabled:
+                        try:
+                            est_lot, est_target = self.get_recovery_target()
+                            hedge_lot_override = float(est_lot)
+                        except Exception:
+                            hedge_lot_override = None
+
                     hedge_info = {
                         "account": self.mt5_manager.instances[MT5InstanceType.HEDGE_ACCOUNT]["account"],
-                        "is_active": True
+                        "is_active": True,
+                        "lot_override": hedge_lot_override
                     }
             
             maven_accounts = [
@@ -142,7 +152,10 @@ class MavelCoreSystem:
                 lot_size=lot_size,
                 trade_type=trade_type,
                 maven_accounts=maven_accounts,
-                hedge_instance_info=hedge_info
+                hedge_instance_info=hedge_info,
+                tp_pips=tp_pips,
+                sl_pips=sl_pips,
+                hedge_lot=hedge_lot_override
             )
             
             return (success, results)
