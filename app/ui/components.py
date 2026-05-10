@@ -142,9 +142,23 @@ class TradingControlsWidget(ctk.CTkFrame):
         self.command_callback = command_callback
         self.grid_columnconfigure(0, weight=1)
 
+        # Execution mode selector
+        mode_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
+        mode_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(8, 4))
+        mode_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(mode_frame, text="Execution Mode:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
+        self.execution_mode_var = ctk.StringVar(value="Hedge + Funded")
+        self.execution_mode_menu = ctk.CTkOptionMenu(
+            mode_frame,
+            values=["Hedge + Funded", "Funded Only", "Hedge Only"],
+            variable=self.execution_mode_var,
+        )
+        self.execution_mode_menu.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+
         # Symbol input
         symbol_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        symbol_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(10, 6))
+        symbol_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 6))
         symbol_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(symbol_frame, text="Symbol:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
@@ -154,7 +168,7 @@ class TradingControlsWidget(ctk.CTkFrame):
         
         # Lot size input
         lot_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        lot_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 10))
+        lot_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(6, 10))
         lot_frame.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(lot_frame, text="Lot Size:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
@@ -164,12 +178,12 @@ class TradingControlsWidget(ctk.CTkFrame):
         
         # BUY / SELL buttons
         button_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        button_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=10)
+        button_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=10)
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
         button_frame.grid_columnconfigure(2, weight=1)
         
-        buy_btn = ctk.CTkButton(
+        self.buy_btn = ctk.CTkButton(
             button_frame,
             text="BUY",
             font=("Arial", 14, "bold"),
@@ -177,9 +191,9 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#00ff00",
             command=lambda: self.command_callback("buy")
         )
-        buy_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.buy_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         
-        sell_btn = ctk.CTkButton(
+        self.sell_btn = ctk.CTkButton(
             button_frame,
             text="SELL",
             font=("Arial", 14, "bold"),
@@ -187,10 +201,10 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#ff0000",
             command=lambda: self.command_callback("sell")
         )
-        sell_btn.grid(row=0, column=1, sticky="ew", padx=6)
+        self.sell_btn.grid(row=0, column=1, sticky="ew", padx=6)
         
         # Emergency close
-        close_btn = ctk.CTkButton(
+        self.close_btn = ctk.CTkButton(
             button_frame,
             text="CLOSE ALL",
             font=("Arial", 12, "bold"),
@@ -198,11 +212,11 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#888888",
             command=lambda: self.command_callback("close_all")
         )
-        close_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self.close_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
         
         # Feature toggles
         toggle_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        toggle_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=10)
+        toggle_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=10)
         toggle_frame.grid_columnconfigure(0, weight=1)
         toggle_frame.grid_columnconfigure(1, weight=1)
         
@@ -228,7 +242,7 @@ class TradingControlsWidget(ctk.CTkFrame):
 
         # Recovery / TP/SL controls
         recovery_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        recovery_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(6, 12))
+        recovery_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(6, 12))
         recovery_frame.grid_columnconfigure(1, weight=1)
         recovery_frame.grid_columnconfigure(3, weight=1)
 
@@ -247,7 +261,7 @@ class TradingControlsWidget(ctk.CTkFrame):
 
         # Recovery estimate display
         estimate_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        estimate_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 10))
+        estimate_frame.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 10))
         estimate_frame.grid_columnconfigure(0, weight=1)
         self.estimate_label = ctk.CTkLabel(estimate_frame, text="Est Hedge Lot: - | Target: $-", font=("Arial", 10), text_color="#00ff88")
         self.estimate_label.grid(row=0, column=0, sticky="w")
@@ -276,12 +290,194 @@ class TradingControlsWidget(ctk.CTkFrame):
             sl = 20.0
         return tp, sl
 
+    def get_execution_mode(self) -> str:
+        """Return selected execution mode."""
+        mode = self.execution_mode_var.get().strip()
+        return mode or "Hedge + Funded"
+
     def set_recovery_estimate(self, lot: float, target: float) -> None:
         """Update the UI with recovery estimate values."""
         try:
             self.estimate_label.configure(text=f"Est Hedge Lot: {lot:.2f}L | Target: ${target:.2f}")
         except Exception:
             pass
+
+    def set_trading_enabled(self, enabled: bool) -> None:
+        """Enable/disable new entries while keeping emergency close available."""
+        state = "normal" if enabled else "disabled"
+        try:
+            self.buy_btn.configure(state=state)
+            self.sell_btn.configure(state=state)
+            self.symbol_input.configure(state=state)
+            self.lot_input.configure(state=state)
+            self.tp_input.configure(state=state)
+            self.sl_input.configure(state=state)
+        except Exception:
+            pass
+
+
+class ChallengeConfigWidget(ctk.CTkFrame):
+    """Challenge configuration and hedge intelligence panel."""
+
+    ACCOUNT_SIZE_OPTIONS = ["2K", "5K", "10K", "25K", "50K", "Custom"]
+    INSTRUMENT_OPTIONS = [
+        "USTECH", "US100", "NAS100", "US30", "SPX500",
+        "XAUUSD", "XAGUSD",
+        "EURUSD", "GBPUSD", "USDJPY", "GBPJPY", "EURJPY",
+    ]
+    RECOVERY_MODES = ["conservative", "balanced", "aggressive"]
+
+    def __init__(self, parent, action_callback: Callable[[str, Dict[str, Any]], None], **kwargs):
+        super().__init__(parent, fg_color="#121826", **kwargs)
+        self.action_callback = action_callback
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+
+        self.account_size_option = ctk.StringVar(value="5K")
+        self.custom_account_size = ctk.StringVar(value="5000")
+        self.purchase_fee = ctk.StringVar(value="59")
+        self.profit_target_pct = ctk.StringVar(value="8")
+        self.daily_dd_pct = ctk.StringVar(value="5")
+        self.overall_dd_pct = ctk.StringVar(value="10")
+        self.max_lots_allowed = ctk.StringVar(value="5")
+        self.profit_split_pct = ctk.StringVar(value="80")
+        self.stop_loss_pips = ctk.StringVar(value="20")
+        self.take_profit_pips = ctk.StringVar(value="10")
+        self.recovery_deficit = ctk.StringVar(value="0")
+        self.desired_surplus = ctk.StringVar(value="100")
+        self.risk_per_trade_pct = ctk.StringVar(value="0.50")
+        self.realized_hedge_loss = ctk.StringVar(value="0")
+        self.symbol = ctk.StringVar(value="US100")
+        self.recovery_mode = ctk.StringVar(value="balanced")
+        self.template_name = ctk.StringVar(value="Maven 5K")
+
+        title = ctk.CTkLabel(self, text="CHALLENGE CONFIGURATION", font=("Arial", 12, "bold"), text_color="#00ffcc")
+        title.grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+
+        self._add_option_menu(1, "Account Size", self.account_size_option, self.ACCOUNT_SIZE_OPTIONS)
+        self._add_entry(2, "Custom Size", self.custom_account_size)
+        self._add_entry(3, "Purchase Fee", self.purchase_fee)
+        self._add_entry(4, "Profit Target %", self.profit_target_pct)
+        self._add_entry(5, "Daily DD %", self.daily_dd_pct)
+        self._add_entry(6, "Overall DD %", self.overall_dd_pct)
+        self._add_entry(7, "Max Lots", self.max_lots_allowed)
+        self._add_entry(8, "Profit Split %", self.profit_split_pct)
+        self._add_option_menu(9, "Instrument", self.symbol, self.INSTRUMENT_OPTIONS)
+        self._add_entry(10, "Stop Loss (pips)", self.stop_loss_pips)
+        self._add_entry(11, "Take Profit (pips)", self.take_profit_pips)
+        self._add_option_menu(12, "Recovery Mode", self.recovery_mode, self.RECOVERY_MODES)
+        self._add_entry(13, "Recovery Deficit", self.recovery_deficit)
+        self._add_entry(14, "Desired Surplus", self.desired_surplus)
+        self._add_entry(15, "Risk/Trade %", self.risk_per_trade_pct)
+        self._add_entry(16, "Realized Hedge Loss", self.realized_hedge_loss)
+
+        template_row = ctk.CTkFrame(self, fg_color="#121826")
+        template_row.grid(row=17, column=0, columnspan=2, sticky="ew", padx=12, pady=(8, 6))
+        template_row.grid_columnconfigure(0, weight=1)
+        template_entry = ctk.CTkEntry(template_row, textvariable=self.template_name)
+        template_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkButton(template_row, text="Save Template", command=self._save_template).grid(row=0, column=1, padx=3)
+
+        action_row = ctk.CTkFrame(self, fg_color="#121826")
+        action_row.grid(row=18, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 10))
+        action_row.grid_columnconfigure(0, weight=1)
+        action_row.grid_columnconfigure(1, weight=1)
+        action_row.grid_columnconfigure(2, weight=1)
+
+        ctk.CTkButton(action_row, text="Apply Rules", fg_color="#005f87", hover_color="#007fb4", command=self._apply_rules).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkButton(action_row, text="Compute Hedge Plan", fg_color="#0b7d3b", hover_color="#0ea94f", command=self._compute_plan).grid(row=0, column=1, sticky="ew", padx=(6, 6))
+        ctk.CTkButton(action_row, text="Auto-Fill Hedge P/L", fg_color="#7a3e00", hover_color="#a85400", command=self._auto_fill_loss).grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
+        ctk.CTkButton(action_row, text="Record Hedge Loss", fg_color="#9c4f00", hover_color="#bf6500", command=self._record_hedge_loss).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(6, 0))
+
+        self.output_label = ctk.CTkLabel(
+            self,
+            text="Funded Lot: - | Hedge Lot: - | Recovery Target: $-",
+            font=("Arial", 10, "bold"),
+            text_color="#00ff88",
+            justify="left",
+            wraplength=560,
+        )
+        self.output_label.grid(row=19, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 10))
+
+    def _add_entry(self, row: int, label: str, variable: ctk.StringVar) -> None:
+        ctk.CTkLabel(self, text=label, font=("Arial", 10), text_color="#a9b4cf").grid(
+            row=row, column=0, sticky="w", padx=12, pady=4
+        )
+        ctk.CTkEntry(self, textvariable=variable).grid(row=row, column=1, sticky="ew", padx=12, pady=4)
+
+    def _add_option_menu(self, row: int, label: str, variable: ctk.StringVar, values: List[str]) -> None:
+        ctk.CTkLabel(self, text=label, font=("Arial", 10), text_color="#a9b4cf").grid(
+            row=row, column=0, sticky="w", padx=12, pady=4
+        )
+        ctk.CTkOptionMenu(self, variable=variable, values=values).grid(row=row, column=1, sticky="ew", padx=12, pady=4)
+
+    def _to_float(self, value: str, fallback: float) -> float:
+        try:
+            return float(str(value).strip())
+        except Exception:
+            return fallback
+
+    def _resolve_account_size(self) -> float:
+        selected = self.account_size_option.get().strip().upper()
+        preset_map = {
+            "2K": 2000.0,
+            "5K": 5000.0,
+            "10K": 10000.0,
+            "25K": 25000.0,
+            "50K": 50000.0,
+        }
+        if selected in preset_map:
+            return preset_map[selected]
+        return max(500.0, self._to_float(self.custom_account_size.get(), 5000.0))
+
+    def _collect_payload(self) -> Dict[str, Any]:
+        return {
+            "account_size": self._resolve_account_size(),
+            "purchase_fee": self._to_float(self.purchase_fee.get(), 59.0),
+            "profit_target_pct": self._to_float(self.profit_target_pct.get(), 8.0),
+            "daily_drawdown_pct": self._to_float(self.daily_dd_pct.get(), 5.0),
+            "overall_drawdown_pct": self._to_float(self.overall_dd_pct.get(), 10.0),
+            "max_lots_allowed": self._to_float(self.max_lots_allowed.get(), 5.0),
+            "profit_split_pct": self._to_float(self.profit_split_pct.get(), 80.0),
+            "symbol": self.symbol.get().strip().upper(),
+            "stop_loss_pips": self._to_float(self.stop_loss_pips.get(), 20.0),
+            "take_profit_pips": self._to_float(self.take_profit_pips.get(), 10.0),
+            "recovery_deficit": self._to_float(self.recovery_deficit.get(), 0.0),
+            "desired_surplus": self._to_float(self.desired_surplus.get(), 100.0),
+            "risk_per_trade_pct": self._to_float(self.risk_per_trade_pct.get(), 0.5),
+            "recovery_mode": self.recovery_mode.get().strip().lower(),
+        }
+
+    def _apply_rules(self) -> None:
+        self.action_callback("apply_challenge_rules", self._collect_payload())
+
+    def _compute_plan(self) -> None:
+        self.action_callback("compute_dynamic_plan", self._collect_payload())
+
+    def _save_template(self) -> None:
+        payload = self._collect_payload()
+        payload["template_name"] = self.template_name.get().strip()
+        self.action_callback("save_template", payload)
+
+    def _record_hedge_loss(self) -> None:
+        payload = self._collect_payload()
+        payload["realized_hedge_loss"] = self._to_float(self.realized_hedge_loss.get(), 0.0)
+        self.action_callback("record_hedge_loss", payload)
+
+    def _auto_fill_loss(self) -> None:
+        self.action_callback("auto_fill_latest_hedge_loss", self._collect_payload())
+
+    def update_output(self, result: Dict[str, Any]) -> None:
+        if not result:
+            return
+        text = (
+            f"Funded Lot: {result.get('funded_lot_size', 0.0):.2f} | "
+            f"Hedge Lot: {result.get('hedge_lot_size', 0.0):.2f} | "
+            f"Recovery Target: ${result.get('recovery_target', 0.0):.2f} | "
+            f"Max Loss: ${result.get('max_loss_projection', 0.0):.2f} | "
+            f"Recovery Efficiency: {result.get('recovery_efficiency_pct', 0.0):.1f}%"
+        )
+        self.output_label.configure(text=text)
 
 
 class AccountGridWidget(ctk.CTkFrame):

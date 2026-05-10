@@ -6,14 +6,17 @@ Professional SaaS-style trading dashboard with CustomTkinter
 import customtkinter as ctk
 from typing import Optional, Dict, Any, Callable
 import asyncio
+import csv
+import json
 import threading
 from datetime import datetime
+from pathlib import Path
 from app.core.orchestrator import get_system
 from app.mt5_bridge.connection_manager import MT5InstanceType, ConnectionState
 from app.utils.config import get_config
 from app.ui.components import (
     MarketFeedWidget, AccountHealthWidget, StatusIndicatorWidget,
-    TradingControlsWidget, AccountGridWidget
+    TradingControlsWidget, AccountGridWidget, ChallengeConfigWidget
 )
 
 
@@ -55,6 +58,13 @@ class MarvelDashboard(ctk.CTk):
         self.auto_connect_var = ctk.BooleanVar(value=self.config.get("ui.auto_connect_on_startup", True))
         self._resize_after_id = None
         self._layout_mode = None
+        self.current_risk_mode = "balanced"
+        self.ledger_days_var = ctk.StringVar(value="30")
+        self.ledger_account_var = ctk.StringVar(value="")
+        self.ledger_status_var = ctk.StringVar(value="all")
+        self.ledger_action_var = ctk.StringVar(value="all")
+        self.ledger_source_var = ctk.StringVar(value="all")
+        self.ledger_export_status_var = ctk.StringVar(value="")
         
         # Configure grid
         self.grid_rowconfigure(0, weight=1)
@@ -81,6 +91,7 @@ class MarvelDashboard(ctk.CTk):
         self.main_container = ctk.CTkFrame(self, fg_color="#0a0a0a")
         self.main_container.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         self.main_container.grid_rowconfigure(2, weight=1)
+        self.main_container.grid_rowconfigure(3, weight=0)
         self.main_container.grid_columnconfigure(0, weight=1)
         
         # === HEADER ===
@@ -103,6 +114,9 @@ class MarvelDashboard(ctk.CTk):
         # Right Panel: Controls & Accounts
         self.right_panel = self._create_right_panel(self.content_frame)
         self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+
+        # === BOTTOM ANALYTICS / LEDGER PANEL ===
+        self._create_ledger_panel(self.main_container)
 
         self._apply_responsive_layout()
 
@@ -148,6 +162,7 @@ class MarvelDashboard(ctk.CTk):
                 self.right_panel.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
             else:
                 self.main_container.grid_rowconfigure(2, weight=1)
+                self.main_container.grid_rowconfigure(3, weight=0)
                 self.main_container.grid_columnconfigure(0, weight=1)
                 self.login_panel.grid_columnconfigure(0, weight=1)
                 self.login_panel.grid_columnconfigure(1, weight=1)
@@ -163,6 +178,238 @@ class MarvelDashboard(ctk.CTk):
                 self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=0)
         except Exception as e:
             self.logger.debug(f"Responsive layout update failed: {str(e)}")
+
+    def _create_ledger_panel(self, parent) -> None:
+        """Create bottom-wide recovery ledger panel."""
+        self.ledger_panel = ctk.CTkFrame(parent, fg_color="#111111")
+        self.ledger_panel.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.ledger_panel.grid_columnconfigure(0, weight=1)
+        self.ledger_panel.grid_rowconfigure(1, weight=0)
+        self.ledger_panel.grid_rowconfigure(2, weight=1)
+
+        header = ctk.CTkFrame(self.ledger_panel, fg_color="#111111")
+        header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
+        header.grid_columnconfigure(0, weight=1)
+        header.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="RECOVERY LEDGER",
+            font=("Arial", 12, "bold"),
+            text_color="#00ffcc"
+        ).grid(row=0, column=0, sticky="w")
+
+        self.ledger_summary_label = ctk.CTkLabel(
+            header,
+            text="No recovery activity yet",
+            font=("Arial", 10),
+            text_color="#888888"
+        )
+        self.ledger_summary_label.grid(row=0, column=1, sticky="e")
+
+        filter_bar = ctk.CTkFrame(self.ledger_panel, fg_color="#111111")
+        filter_bar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        for column_index in range(10):
+            filter_bar.grid_columnconfigure(column_index, weight=1)
+
+        ctk.CTkLabel(filter_bar, text="Days", text_color="#888", font=("Arial", 10)).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        ctk.CTkEntry(filter_bar, textvariable=self.ledger_days_var, width=60).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(filter_bar, text="Account", text_color="#888", font=("Arial", 10)).grid(row=0, column=2, sticky="w", padx=(0, 4))
+        ctk.CTkEntry(filter_bar, textvariable=self.ledger_account_var, width=90).grid(row=0, column=3, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(filter_bar, text="Status", text_color="#888", font=("Arial", 10)).grid(row=0, column=4, sticky="w", padx=(0, 4))
+        ctk.CTkOptionMenu(filter_bar, variable=self.ledger_status_var, values=["all", "pending", "partial", "completed"]).grid(row=0, column=5, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(filter_bar, text="Action", text_color="#888", font=("Arial", 10)).grid(row=0, column=6, sticky="w", padx=(0, 4))
+        ctk.CTkOptionMenu(filter_bar, variable=self.ledger_action_var, values=["all", "loss_recorded", "recovered"]).grid(row=0, column=7, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(filter_bar, text="Source", text_color="#888", font=("Arial", 10)).grid(row=0, column=8, sticky="w", padx=(0, 4))
+        ctk.CTkOptionMenu(filter_bar, variable=self.ledger_source_var, values=["all", "manual", "auto"]).grid(row=0, column=9, sticky="ew", padx=(0, 8))
+
+        ctk.CTkButton(filter_bar, text="Refresh", width=90, command=self._refresh_ledger_display).grid(row=0, column=10, sticky="e", padx=(0, 6))
+        ctk.CTkButton(filter_bar, text="Export CSV", width=100, command=self._export_ledger_display).grid(row=0, column=11, sticky="e")
+
+        self.recovery_ledger_box = ctk.CTkTextbox(
+            self.ledger_panel,
+            height=140,
+            fg_color="#0d0d0d",
+            text_color="#d8e2f0"
+        )
+        self.recovery_ledger_box.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self.recovery_ledger_box.configure(state="disabled")
+        self._refresh_ledger_display()
+
+    def _append_ledger_line(self, line: str) -> None:
+        """Append a new line to the visible recovery ledger."""
+        try:
+            self.recovery_ledger_box.configure(state="normal")
+            self.recovery_ledger_box.insert("end", line.rstrip() + "\n")
+            self.recovery_ledger_box.see("end")
+            self.recovery_ledger_box.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _refresh_ledger_display(self) -> None:
+        """Reload recent ledger entries into the UI."""
+        try:
+            entries = self._get_filtered_ledger_entries()
+
+            def parse_time(value: str) -> Optional[datetime]:
+                try:
+                    return datetime.fromisoformat(value)
+                except Exception:
+                    return None
+
+            def get_source(row: Dict[str, Any]) -> str:
+                notes = str(row.get("notes", "") or "").lower()
+                if "source=auto" in notes:
+                    return "auto"
+                if "source=manual" in notes:
+                    return "manual"
+                return "manual"
+
+            days_raw = self.ledger_days_var.get().strip()
+            days = int(days_raw) if days_raw.isdigit() and int(days_raw) > 0 else 30
+            cutoff = datetime.now().timestamp() - (days * 86400)
+
+            account_filter = self.ledger_account_var.get().strip()
+            status_filter = self.ledger_status_var.get().strip().lower()
+            action_filter = self.ledger_action_var.get().strip().lower()
+            source_filter = self.ledger_source_var.get().strip().lower()
+
+            filtered_entries: list[Dict[str, Any]] = []
+            for row in entries:
+                row_time = parse_time(str(row.get("timestamp", "")))
+                if row_time is None or row_time.timestamp() < cutoff:
+                    continue
+
+                if account_filter and str(row.get("account_number", "")).strip() != account_filter:
+                    continue
+
+                if status_filter != "all" and str(row.get("status", "")).strip().lower() != status_filter:
+                    continue
+
+                if action_filter != "all" and str(row.get("action", "")).strip().lower() != action_filter:
+                    continue
+
+                if source_filter != "all" and get_source(row) != source_filter:
+                    continue
+
+                filtered_entries.append(row)
+
+            self.recovery_ledger_box.configure(state="normal")
+            self.recovery_ledger_box.delete("1.0", "end")
+
+            if not filtered_entries:
+                self.recovery_ledger_box.insert("end", "No recovery ledger entries match the current filters.\n")
+                self.ledger_summary_label.configure(text="Waiting for matching recovery activity...")
+            else:
+                for row in filtered_entries:
+                    source = get_source(row)
+                    line = (
+                        f"[{row.get('timestamp', '')}] {row.get('action', '')} | "
+                        f"Account {row.get('account_number', '')} | "
+                        f"Loss ${float(row.get('hedge_loss', 0.0)):.2f} | "
+                        f"Target ${float(row.get('total_target', 0.0)):.2f} | "
+                        f"Status {row.get('status', '')} | Source {source}"
+                    )
+                    self.recovery_ledger_box.insert("end", line + "\n")
+
+                last = filtered_entries[-1]
+                self.ledger_summary_label.configure(
+                    text=f"Latest: {last.get('action', '')} | ${float(last.get('hedge_loss', 0.0)):.2f} hedge loss | {get_source(last)}"
+                )
+
+            self.recovery_ledger_box.configure(state="disabled")
+        except Exception as e:
+            self.logger.debug(f"Ledger refresh failed: {str(e)}")
+
+    def _get_filtered_ledger_entries(self) -> list[Dict[str, Any]]:
+        """Return ledger entries that match the active UI filters."""
+        entries = self.system.recovery_engine.get_recent_ledger_entries(limit=200)
+
+        def parse_time(value: str) -> Optional[datetime]:
+            try:
+                return datetime.fromisoformat(value)
+            except Exception:
+                return None
+
+        def get_source(row: Dict[str, Any]) -> str:
+            notes = str(row.get("notes", "") or "").lower()
+            if "source=auto" in notes:
+                return "auto"
+            return "manual"
+
+        days_raw = self.ledger_days_var.get().strip()
+        days = int(days_raw) if days_raw.isdigit() and int(days_raw) > 0 else 30
+        cutoff = datetime.now().timestamp() - (days * 86400)
+
+        account_filter = self.ledger_account_var.get().strip()
+        status_filter = self.ledger_status_var.get().strip().lower()
+        action_filter = self.ledger_action_var.get().strip().lower()
+        source_filter = self.ledger_source_var.get().strip().lower()
+
+        filtered_entries: list[Dict[str, Any]] = []
+        for row in entries:
+            row_time = parse_time(str(row.get("timestamp", "")))
+            if row_time is None or row_time.timestamp() < cutoff:
+                continue
+
+            if account_filter and str(row.get("account_number", "")).strip() != account_filter:
+                continue
+
+            if status_filter != "all" and str(row.get("status", "")).strip().lower() != status_filter:
+                continue
+
+            if action_filter != "all" and str(row.get("action", "")).strip().lower() != action_filter:
+                continue
+
+            if source_filter != "all" and get_source(row) != source_filter:
+                continue
+
+            filtered_entries.append(row)
+
+        return filtered_entries
+
+    def _export_ledger_display(self) -> None:
+        """Export the currently filtered ledger view to CSV and JSON."""
+        try:
+            entries = self._get_filtered_ledger_entries()
+            export_dir = Path("data") / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_path = export_dir / f"recovery_ledger_{stamp}.csv"
+            json_path = export_dir / f"recovery_ledger_{stamp}.json"
+
+            fieldnames = [
+                "timestamp",
+                "cycle_id",
+                "account_number",
+                "action",
+                "hedge_loss",
+                "challenge_fee",
+                "total_target",
+                "hedge_lot_size",
+                "status",
+                "notes",
+            ]
+
+            with open(csv_path, "w", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in entries:
+                    writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+            with open(json_path, "w") as json_file:
+                json.dump(entries, json_file, indent=2)
+
+            self.ledger_summary_label.configure(text=f"Exported {len(entries)} rows")
+            self.ledger_export_status_var.set(f"Saved to {csv_path} and {json_path}")
+            self.logger.info(f"Recovery ledger exported: {csv_path} | {json_path}")
+        except Exception as e:
+            self.logger.debug(f"Ledger export failed: {str(e)}")
+            self.ledger_summary_label.configure(text="Export failed")
     
     def _create_header(self, parent) -> None:
         """Create header with title and connection status"""
@@ -201,6 +448,31 @@ class MarvelDashboard(ctk.CTk):
             text_color="#666"
         )
         session_label.pack(side="right", padx=20, pady=20)
+
+        # Supplemental telemetry for hedge intelligence
+        self.engine_status_label = ctk.CTkLabel(
+            header,
+            text="Engine: Ready",
+            font=("Arial", 10, "bold"),
+            text_color="#00bcd4"
+        )
+        self.engine_status_label.pack(side="right", padx=8)
+
+        self.recovery_deficit_label = ctk.CTkLabel(
+            header,
+            text="Recovery Deficit: $0.00",
+            font=("Arial", 10),
+            text_color="#8ecae6"
+        )
+        self.recovery_deficit_label.pack(side="right", padx=8)
+
+        self.risk_mode_label = ctk.CTkLabel(
+            header,
+            text="Risk Mode: BALANCED",
+            font=("Arial", 10, "bold"),
+            text_color="#90ee90"
+        )
+        self.risk_mode_label.pack(side="right", padx=8)
 
     def _create_login_panel(self, parent) -> None:
         """Create MT5 login panel for Maven and hedge accounts"""
@@ -584,6 +856,8 @@ class MarvelDashboard(ctk.CTk):
         """Create left panel with market data and health"""
         left_panel = ctk.CTkFrame(parent, fg_color="#0a0a0a")
         left_panel.grid_rowconfigure(1, weight=1)
+        left_panel.grid_rowconfigure(3, weight=1)
+        left_panel.grid_columnconfigure(0, weight=1)
         
         # Market Feed
         market_label = ctk.CTkLabel(
@@ -614,31 +888,47 @@ class MarvelDashboard(ctk.CTk):
     def _create_right_panel(self, parent) -> ctk.CTkFrame:
         """Create right panel with controls and account grid"""
         right_panel = ctk.CTkFrame(parent, fg_color="#0a0a0a")
-        right_panel.grid_rowconfigure(1, weight=1)
+        right_panel.grid_rowconfigure(0, weight=1)
+        right_panel.grid_columnconfigure(0, weight=1)
+
+        scroll = ctk.CTkScrollableFrame(right_panel, fg_color="#0a0a0a")
+        scroll.grid(row=0, column=0, sticky="nsew")
+        scroll.grid_columnconfigure(0, weight=1)
         
         # Trading Controls
         controls_label = ctk.CTkLabel(
-            right_panel,
+            scroll,
             text="TRADING CONTROLS",
             font=("Arial", 12, "bold"),
             text_color="#00ff88"
         )
         controls_label.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         
-        self.trading_controls = TradingControlsWidget(right_panel, self._on_trade_command)
+        self.trading_controls = TradingControlsWidget(scroll, self._on_trade_command)
         self.trading_controls.grid(row=1, column=0, sticky="nsew")
+
+        challenge_label = ctk.CTkLabel(
+            scroll,
+            text="PROP FIRM RULES ENGINE",
+            font=("Arial", 12, "bold"),
+            text_color="#00ffcc"
+        )
+        challenge_label.grid(row=2, column=0, sticky="ew", pady=(14, 8))
+
+        self.challenge_config = ChallengeConfigWidget(scroll, self._on_challenge_action)
+        self.challenge_config.grid(row=3, column=0, sticky="nsew")
         
         # Account Grid
         accounts_label = ctk.CTkLabel(
-            right_panel,
+            scroll,
             text="MAVEN FLEET",
             font=("Arial", 12, "bold"),
             text_color="#00ff88"
         )
-        accounts_label.grid(row=2, column=0, sticky="ew", pady=(20, 10))
+        accounts_label.grid(row=4, column=0, sticky="ew", pady=(20, 10))
         
-        self.account_grid = AccountGridWidget(right_panel, self.system.account_manager)
-        self.account_grid.grid(row=3, column=0, sticky="nsew")
+        self.account_grid = AccountGridWidget(scroll, self.system.account_manager)
+        self.account_grid.grid(row=5, column=0, sticky="nsew")
         
         return right_panel
     
@@ -667,13 +957,79 @@ class MarvelDashboard(ctk.CTk):
                 self.trading_controls.set_recovery_estimate(lot, target)
             except Exception:
                 pass
+
+    def _on_challenge_action(self, action: str, payload: Dict[str, Any]) -> None:
+        """Handle Prop Firm Rules Engine actions from the dashboard panel."""
+        try:
+            if action == "apply_challenge_rules":
+                summary = self.system.configure_prop_challenge(payload)
+                self.current_risk_mode = str(payload.get("recovery_mode", "balanced")).upper()
+                self.risk_mode_label.configure(text=f"Risk Mode: {self.current_risk_mode}")
+                self.engine_status_label.configure(text="Engine: Rules Applied", text_color="#00ffcc")
+                self.recovery_deficit_label.configure(
+                    text=f"Daily DD ${summary.get('max_daily_loss_allowed', 0.0):.2f} | Target ${summary.get('target_dollar_amount', 0.0):.2f}"
+                )
+            elif action == "compute_dynamic_plan":
+                result = self.system.calculate_dynamic_hedge_plan(payload)
+                self.challenge_config.update_output(result)
+                self.trading_controls.lot_var.set(f"{result.get('funded_lot_size', 0.1):.2f}")
+                self.trading_controls.set_recovery_estimate(
+                    float(result.get("hedge_lot_size", 0.0)),
+                    float(result.get("recovery_target", 0.0)),
+                )
+                self.recovery_deficit_label.configure(text=f"Recovery Deficit: ${result.get('recovery_target', 0.0):.2f}")
+                self.engine_status_label.configure(text="Engine: Plan Updated", text_color="#00ff88")
+            elif action == "save_template":
+                name = str(payload.get("template_name", "")).strip()
+                if name:
+                    self.system.configure_prop_challenge(payload)
+                    if self.system.save_challenge_template(name):
+                        self.engine_status_label.configure(text=f"Template Saved: {name}", text_color="#90ee90")
+            elif action == "record_hedge_loss":
+                hedge_loss = float(payload.get("realized_hedge_loss", 0.0))
+                if hedge_loss > 0:
+                    active_accounts = self.system.account_manager.get_active_accounts()
+                    account_number = active_accounts[0].account_number if active_accounts else 0
+                    cycle_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    fee = float(payload.get("purchase_fee", 0.0))
+                    ok = self.system.record_hedge_loss(cycle_id, account_number, hedge_loss, fee)
+                    if ok:
+                        self.engine_status_label.configure(text=f"Loss Recorded: ${hedge_loss:.2f}", text_color="#ffcc66")
+                        self.recovery_deficit_label.configure(text=f"Recovery Deficit Updated (+${hedge_loss:.2f})")
+                        self._append_ledger_line(
+                            f"[{datetime.now().isoformat(timespec='seconds')}] loss_recorded | Account {account_number} | Loss ${hedge_loss:.2f} | Target ${hedge_loss + fee:.2f} | Status pending"
+                        )
+            elif action == "auto_fill_latest_hedge_loss":
+                latest_pnl = self.system.get_latest_hedge_trade_pnl()
+                if latest_pnl is not None:
+                    hedge_loss = abs(float(latest_pnl)) if float(latest_pnl) < 0 else 0.0
+                    self.challenge_config.realized_hedge_loss.set(f"{hedge_loss:.2f}")
+                    if hedge_loss > 0:
+                        self.engine_status_label.configure(text=f"Latest Hedge Loss Loaded: ${hedge_loss:.2f}", text_color="#ffcc66")
+                    else:
+                        self.engine_status_label.configure(text=f"Latest Hedge P/L was positive: ${float(latest_pnl):.2f}", text_color="#90ee90")
+                else:
+                    self.engine_status_label.configure(text="No hedge trade result found", text_color="#ffaa00")
+        except Exception as e:
+            self.logger.debug(f"Challenge action error: {str(e)}")
+            self.engine_status_label.configure(text="Engine: Error", text_color="#ff5555")
     
     async def _execute_buy(self, tp_pips: float = None, sl_pips: float = None) -> None:
         """Execute BUY order"""
         lot_size = self.trading_controls.get_lot_size()
         symbol = self.trading_controls.get_symbol()
-        
-        success, results = await self.system.execute_buy_order(symbol, lot_size, tp_pips=tp_pips, sl_pips=sl_pips)
+        mode = self.trading_controls.get_execution_mode()
+        use_hedge = mode in ["Hedge + Funded", "Hedge Only"]
+        use_maven = mode in ["Hedge + Funded", "Funded Only"]
+
+        success, results = await self.system.execute_buy_order(
+            symbol,
+            lot_size,
+            use_hedge=use_hedge,
+            use_maven=use_maven,
+            tp_pips=tp_pips,
+            sl_pips=sl_pips,
+        )
         
         if success:
             self.logger.info(f"BUY executed: {results.get('success_count')} accounts")
@@ -684,8 +1040,18 @@ class MarvelDashboard(ctk.CTk):
         """Execute SELL order"""
         lot_size = self.trading_controls.get_lot_size()
         symbol = self.trading_controls.get_symbol()
-        
-        success, results = await self.system.execute_sell_order(symbol, lot_size, tp_pips=tp_pips, sl_pips=sl_pips)
+        mode = self.trading_controls.get_execution_mode()
+        use_hedge = mode in ["Hedge + Funded", "Hedge Only"]
+        use_maven = mode in ["Hedge + Funded", "Funded Only"]
+
+        success, results = await self.system.execute_sell_order(
+            symbol,
+            lot_size,
+            use_hedge=use_hedge,
+            use_maven=use_maven,
+            tp_pips=tp_pips,
+            sl_pips=sl_pips,
+        )
         
         if success:
             self.logger.info(f"SELL executed: {results.get('success_count')} accounts")
@@ -715,6 +1081,34 @@ class MarvelDashboard(ctk.CTk):
                     
                     # Update account grid
                     self.account_grid.refresh_accounts(self.system.mt5_manager)
+                    self._refresh_ledger_display()
+
+                    # Auto-record any newly closed losing hedge trade once
+                    auto_record = self.system.auto_record_latest_hedge_loss()
+                    if auto_record.get("recorded"):
+                        loss_value = float(auto_record.get("hedge_loss", 0.0))
+                        self.challenge_config.realized_hedge_loss.set(f"{loss_value:.2f}")
+                        self.engine_status_label.configure(
+                            text=f"Auto-recorded Hedge Loss: ${loss_value:.2f}",
+                            text_color="#ffcc66"
+                        )
+                        self.recovery_deficit_label.configure(text=f"Recovery Deficit Updated (+${loss_value:.2f})")
+                        self._append_ledger_line(
+                            f"[{datetime.now().isoformat(timespec='seconds')}] auto_recorded | Ticket {auto_record.get('ticket')} | Account {auto_record.get('account_number')} | Loss ${loss_value:.2f} | Symbol {auto_record.get('symbol', '')}"
+                        )
+
+                    # Auto-protection based on drawdown usage (90%+)
+                    active_accounts = self.system.account_manager.get_active_accounts()
+                    primary_account = active_accounts[0].account_number if active_accounts else None
+                    if primary_account:
+                        guard = self.system.get_drawdown_guardrail(primary_account)
+                        if guard.get("is_available"):
+                            usage = float(guard.get("drawdown_usage_pct", 0.0))
+                            if guard.get("protection_triggered"):
+                                self.trading_controls.set_trading_enabled(False)
+                                self.engine_status_label.configure(text=f"Engine: Protection ON ({usage:.1f}%)", text_color="#ffb703")
+                            else:
+                                self.trading_controls.set_trading_enabled(True)
                     
                     threading.Event().wait(0.5)
                 except Exception as e:

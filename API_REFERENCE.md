@@ -45,19 +45,24 @@ success = system.login_hedge_account(654321, "password", "ICMarkets-Live")
 
 ### Trade Execution
 
-#### execute_buy_order(symbol: str, lot_size: float, use_hedge: bool = True) 
+#### execute_buy_order(symbol: str, lot_size: float, use_hedge: bool = True, use_maven: bool = True) 
 -> Tuple[bool, Dict[str, Any]]
 Execute synchronized BUY across active accounts
 ```python
-success, results = await system.execute_buy_order("US100", 0.1, use_hedge=True)
+success, results = await system.execute_buy_order("US100", 0.1, use_hedge=True, use_maven=True)
 print(f"Success: {results['success_count']}, Failed: {results['failure_count']}")
 ```
 
-#### execute_sell_order(symbol: str, lot_size: float, use_hedge: bool = True)
+Execution mode mapping:
+- `Hedge + Funded`: `use_hedge=True`, `use_maven=True`
+- `Funded Only`: `use_hedge=False`, `use_maven=True`
+- `Hedge Only`: `use_hedge=True`, `use_maven=False`
+
+#### execute_sell_order(symbol: str, lot_size: float, use_hedge: bool = True, use_maven: bool = True)
 -> Tuple[bool, Dict[str, Any]]
 Execute synchronized SELL
 ```python
-success, results = await system.execute_sell_order("US100", 0.1)
+success, results = await system.execute_sell_order("US100", 0.1, use_hedge=True, use_maven=True)
 ```
 
 #### close_all_emergency() -> Dict[str, Any]
@@ -149,6 +154,53 @@ success = system.record_recovery_execution(
     target_amount=150.0,
     profit_achieved=155.0
 )
+```
+
+### Prop Firm Rules & Hedge Intelligence
+
+#### configure_prop_challenge(payload: Dict[str, Any]) -> Dict[str, Any]
+Configure dynamic prop-firm rules and return derived dollar limits.
+```python
+summary = system.configure_prop_challenge({
+    "account_size": 5000,
+    "purchase_fee": 59,
+    "profit_target_pct": 8,
+    "daily_drawdown_pct": 5,
+    "overall_drawdown_pct": 10,
+    "max_lots_allowed": 5,
+    "profit_split_pct": 80,
+    "recovery_mode": "balanced"
+})
+print(summary["target_dollar_amount"], summary["max_daily_loss_allowed"])
+```
+
+#### calculate_dynamic_hedge_plan(payload: Dict[str, Any]) -> Dict[str, Any]
+Compute funded lot size, hedge lot size, recovery target, and risk projections.
+```python
+plan = system.calculate_dynamic_hedge_plan({
+    "symbol": "US100",
+    "stop_loss_pips": 20,
+    "take_profit_pips": 10,
+    "recovery_deficit": 108,
+    "desired_surplus": 100,
+    "risk_per_trade_pct": 0.5,
+    "recovery_mode": "balanced"
+})
+print(plan["funded_lot_size"], plan["hedge_lot_size"], plan["recovery_efficiency_pct"])
+```
+
+#### save_challenge_template(template_name: str) -> bool
+Save the currently applied challenge configuration as a reusable template.
+```python
+system.save_challenge_template("Maven 5K")
+```
+
+#### get_drawdown_guardrail(account: int) -> Dict[str, Any]
+Get real-time drawdown usage and auto-protection state.
+```python
+guard = system.get_drawdown_guardrail(123456)
+if guard["protection_triggered"]:
+    print("Protection active: reduce lot size and block new entries")
 ```
 
 ---

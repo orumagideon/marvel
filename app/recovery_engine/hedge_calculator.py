@@ -8,7 +8,7 @@ import csv
 import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from app.utils.logger import get_logger
 from app.utils.constants import (
@@ -174,7 +174,10 @@ class HedgeRecoveryEngine:
                          cycle_id: str,
                          account_number: int,
                          hedge_loss: float,
-                         challenge_fee: float = 0.0) -> bool:
+                         challenge_fee: float = 0.0,
+                         trade_ticket: Optional[int] = None,
+                         trade_symbol: Optional[str] = None,
+                         source: str = "manual") -> bool:
         """
         Record hedge loss to ledger for future recovery
         Used when Maven passes but hedge account loses
@@ -199,7 +202,12 @@ class HedgeRecoveryEngine:
                 total_target=hedge_loss + challenge_fee,
                 hedge_lot_size=0.0,
                 status="pending",
-                notes=f"Loss recorded for recovery in next cycle"
+                notes=(
+                    f"Loss recorded for recovery in next cycle"
+                    + f" | source={source}"
+                    + (f" | ticket={trade_ticket}" if trade_ticket is not None else "")
+                    + (f" | symbol={trade_symbol}" if trade_symbol else "")
+                )
             )
             
             self._append_ledger_entry(entry)
@@ -212,6 +220,28 @@ class HedgeRecoveryEngine:
             return True
         except Exception as e:
             self.logger.log_error(e, "Failed to record hedge loss")
+            return False
+
+    def has_recorded_trade_ticket(self, trade_ticket: int) -> bool:
+        """Return True when the given hedge trade ticket has already been recorded."""
+        if trade_ticket is None:
+            return False
+
+        try:
+            if not self.ledger_file.exists():
+                return False
+
+            needle = f"ticket={trade_ticket}"
+            with open(self.ledger_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get('action') != 'loss_recorded':
+                        continue
+                    if needle in (row.get('notes') or ''):
+                        return True
+            return False
+        except Exception as e:
+            self.logger.log_error(e, "Failed to check recorded trade ticket")
             return False
     
     def record_recovery_execution(self,
@@ -309,6 +339,23 @@ class HedgeRecoveryEngine:
         except Exception as e:
             self.logger.log_error(e, "Failed to get ledger summary")
             return {}
+
+    def get_recent_ledger_entries(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return the most recent ledger entries for UI display."""
+        try:
+            if not self.ledger_file.exists():
+                return []
+
+            entries: List[Dict[str, Any]] = []
+            with open(self.ledger_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    entries.append(row)
+
+            return entries[-max(limit, 1):]
+        except Exception as e:
+            self.logger.log_error(e, "Failed to get recent ledger entries")
+            return []
     
     def estimate_next_recovery_lot(self, 
                                   active_accounts: List[Dict[str, Any]]) -> Tuple[float, float]:
@@ -323,3 +370,172 @@ class HedgeRecoveryEngine:
         lot = self.calculate_hedge_lot_size(target)
         
         return (lot, target)
+
+    def get_latest_recorded_hedge_loss(self) -> Optional[float]:
+        """Return the most recent hedge loss recorded in the recovery ledger."""
+        try:
+            if not self.ledger_file.exists():
+                return None
+
+            latest_loss = None
+            latest_timestamp = None
+
+            with open(self.ledger_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get('action') != 'loss_recorded':
+                        continue
+
+                    timestamp = row.get('timestamp')
+                    if not timestamp:
+                        continue
+
+                    try:
+                        row_time = datetime.fromisoformat(timestamp)
+                    except Exception:
+                        continue
+
+                    if latest_timestamp is None or row_time > latest_timestamp:
+                        latest_timestamp = row_time
+                        latest_loss = float(row.get('hedge_loss', 0.0))
+
+            return latest_loss
+        except Exception as e:
+            self.logger.log_error(e, "Failed to get latest hedge loss")
+            return None
+
+    def get_latest_hedge_trade_pnl(self) -> Optional[float]:
+        """Best-effort lookup of the latest realized hedge trade P/L.
+
+        Returns a signed value where negative means a loss and positive means profit.
+        First checks the local trade log for a recorded result, then attempts an MT5
+        history lookup if the terminal binding is available.
+        """
+        try:
+            trade_log = Path(self.logger.logs_dir) / "trades.jsonl"
+            latest_hedge_trade: Optional[Dict[str, Any]] = None
+
+            if trade_log.exists():
+                with open(trade_log, 'r') as f:
+                    for line in f:
+                        try:
+                            row = json.loads(line)
+                        except Exception:
+                            continue
+
+                        if row.get('action') != 'hedge_execution':
+                            continue
+                        latest_hedge_trade = row
+
+            if latest_hedge_trade:
+                for key in ('profit_loss', 'pnl', 'realized_pnl', 'net_profit'):
+                    value = latest_hedge_trade.get(key)
+                    if value is not None:
+                        return float(value)
+
+                ticket = latest_hedge_trade.get('ticket')
+                symbol = latest_hedge_trade.get('symbol')
+                if ticket or symbol:
+                    try:
+                        import MetaTrader5 as mt5  # type: ignore
+
+                        end = datetime.now()
+                        start = end - timedelta(days=7)
+                        deals = mt5.history_deals_get(start, end)
+                        if deals:
+                            matching_profit = 0.0
+                            found = False
+                            for deal in deals:
+                                deal_ticket = getattr(deal, 'order', None)
+                                deal_symbol = getattr(deal, 'symbol', None)
+                                deal_comment = (getattr(deal, 'comment', '') or '').upper()
+
+                                if ticket is not None and deal_ticket == ticket:
+                                    matching_profit += float(getattr(deal, 'profit', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'commission', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'swap', 0.0) or 0.0)
+                                    found = True
+                                elif symbol and deal_symbol == symbol and 'HEDGE' in deal_comment:
+                                    matching_profit += float(getattr(deal, 'profit', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'commission', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'swap', 0.0) or 0.0)
+                                    found = True
+
+                            if found:
+                                return float(matching_profit)
+                    except Exception:
+                        pass
+
+            return None
+        except Exception as e:
+            self.logger.log_error(e, "Failed to get latest hedge trade pnl")
+            return None
+
+    def get_latest_hedge_trade_context(self) -> Optional[Dict[str, Any]]:
+        """Return the latest hedge trade context with realized P/L and ticket metadata."""
+        try:
+            trade_log = Path(self.logger.logs_dir) / "trades.jsonl"
+            latest: Optional[Dict[str, Any]] = None
+
+            if trade_log.exists():
+                with open(trade_log, 'r') as f:
+                    for line in f:
+                        try:
+                            row = json.loads(line)
+                        except Exception:
+                            continue
+
+                        if row.get('action') == 'hedge_execution':
+                            latest = row
+
+            if not latest:
+                return None
+
+            pnl = None
+            for key in ('profit_loss', 'pnl', 'realized_pnl', 'net_profit'):
+                if latest.get(key) is not None:
+                    try:
+                        pnl = float(latest.get(key))
+                    except Exception:
+                        pnl = None
+                    break
+
+            if pnl is None:
+                ticket = latest.get('ticket')
+                symbol = latest.get('symbol')
+                if ticket or symbol:
+                    try:
+                        import MetaTrader5 as mt5  # type: ignore
+
+                        end = datetime.now()
+                        start = end - timedelta(days=7)
+                        deals = mt5.history_deals_get(start, end)
+                        if deals:
+                            matching_profit = 0.0
+                            found = False
+                            for deal in deals:
+                                deal_ticket = getattr(deal, 'order', None)
+                                deal_symbol = getattr(deal, 'symbol', None)
+                                deal_comment = (getattr(deal, 'comment', '') or '').upper()
+
+                                if ticket is not None and deal_ticket == ticket:
+                                    matching_profit += float(getattr(deal, 'profit', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'commission', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'swap', 0.0) or 0.0)
+                                    found = True
+                                elif symbol and deal_symbol == symbol and 'HEDGE' in deal_comment:
+                                    matching_profit += float(getattr(deal, 'profit', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'commission', 0.0) or 0.0)
+                                    matching_profit += float(getattr(deal, 'swap', 0.0) or 0.0)
+                                    found = True
+
+                            if found:
+                                pnl = float(matching_profit)
+                    except Exception:
+                        pass
+
+            latest['realized_pnl'] = pnl
+            return latest
+        except Exception as e:
+            self.logger.log_error(e, "Failed to get latest hedge trade context")
+            return None

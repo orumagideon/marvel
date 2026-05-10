@@ -35,6 +35,17 @@ class SystemConfig:
             "recovery_log_path": "data/recovery_log.csv",
             "enabled": True
         },
+        "prop_firm": {
+            "default_account_size": 5000.0,
+            "default_purchase_fee": 59.0,
+            "default_profit_target_pct": 8.0,
+            "default_daily_drawdown_pct": 5.0,
+            "default_overall_drawdown_pct": 10.0,
+            "default_max_lots": 5.0,
+            "default_profit_split_pct": 80.0,
+            "default_risk_mode": "balanced",
+            "saved_templates": {}
+        },
         "risk_management": {
             "daily_drawdown_limit": 400.0,
             "min_free_margin_ratio": 0.15,
