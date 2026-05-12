@@ -156,9 +156,48 @@ class TradingControlsWidget(ctk.CTkFrame):
         )
         self.execution_mode_menu.grid(row=0, column=1, sticky="ew", padx=(10, 0))
 
+        # Phase selection (slot + phase)
+        phase_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
+        phase_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 6))
+        phase_frame.grid_columnconfigure(1, weight=1)
+        phase_frame.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(phase_frame, text="Slot:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
+        self.phase_slot_var = ctk.StringVar(value="1")
+        self.phase_slot_menu = ctk.CTkOptionMenu(
+            phase_frame,
+            values=["1", "2", "3", "4", "5"],
+            variable=self.phase_slot_var,
+            command=lambda _value: self._on_phase_selection_changed(),
+        )
+        self.phase_slot_menu.grid(row=0, column=1, sticky="ew", padx=(10, 12))
+
+        ctk.CTkLabel(phase_frame, text="Phase:", font=("Arial", 11), text_color="#888").grid(row=0, column=2, sticky="w")
+        self.phase_var = ctk.StringVar(value="Phase 1")
+        self.phase_menu = ctk.CTkOptionMenu(
+            phase_frame,
+            values=["Phase 1", "Phase 2"],
+            variable=self.phase_var,
+            command=lambda _value: self._on_phase_selection_changed(),
+        )
+        self.phase_menu.grid(row=0, column=3, sticky="ew", padx=(10, 0))
+
+        self.phase_badge = ctk.CTkLabel(
+            phase_frame,
+            text="PHASE 1 ACTIVE",
+            font=("Arial", 10, "bold"),
+            fg_color="#1e3a8a",
+            text_color="#dbeafe",
+            corner_radius=6,
+            padx=10,
+            pady=4,
+        )
+        self.phase_badge.grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self._refresh_phase_badge()
+
         # Symbol input
         symbol_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        symbol_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 6))
+        symbol_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(6, 6))
         symbol_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(symbol_frame, text="Symbol:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
@@ -168,7 +207,7 @@ class TradingControlsWidget(ctk.CTkFrame):
         
         # Lot size input
         lot_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        lot_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(6, 10))
+        lot_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(6, 10))
         lot_frame.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(lot_frame, text="Lot Size:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
@@ -178,7 +217,7 @@ class TradingControlsWidget(ctk.CTkFrame):
         
         # BUY / SELL buttons
         button_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        button_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=10)
+        button_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=10)
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
         button_frame.grid_columnconfigure(2, weight=1)
@@ -216,7 +255,7 @@ class TradingControlsWidget(ctk.CTkFrame):
         
         # Feature toggles
         toggle_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        toggle_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=10)
+        toggle_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=10)
         toggle_frame.grid_columnconfigure(0, weight=1)
         toggle_frame.grid_columnconfigure(1, weight=1)
         
@@ -242,7 +281,7 @@ class TradingControlsWidget(ctk.CTkFrame):
 
         # Recovery / TP/SL controls
         recovery_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        recovery_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(6, 12))
+        recovery_frame.grid(row=6, column=0, sticky="ew", padx=20, pady=(6, 12))
         recovery_frame.grid_columnconfigure(1, weight=1)
         recovery_frame.grid_columnconfigure(3, weight=1)
 
@@ -261,10 +300,13 @@ class TradingControlsWidget(ctk.CTkFrame):
 
         # Recovery estimate display
         estimate_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        estimate_frame.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 10))
+        estimate_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(0, 10))
         estimate_frame.grid_columnconfigure(0, weight=1)
         self.estimate_label = ctk.CTkLabel(estimate_frame, text="Est Hedge Lot: - | Target: $-", font=("Arial", 10), text_color="#00ff88")
         self.estimate_label.grid(row=0, column=0, sticky="w")
+        # Injection / execution overlay status (updated during bridge operations)
+        self.inject_status_label = ctk.CTkLabel(estimate_frame, text="", font=("Arial", 10, "bold"), text_color="#00ff88")
+        self.inject_status_label.grid(row=1, column=0, sticky="w", pady=(4,0))
     
     def get_lot_size(self) -> float:
         """Get current lot size"""
@@ -295,6 +337,42 @@ class TradingControlsWidget(ctk.CTkFrame):
         mode = self.execution_mode_var.get().strip()
         return mode or "Hedge + Funded"
 
+    def get_selected_slot(self) -> int:
+        """Return selected Maven slot from the phase selector."""
+        try:
+            return max(1, min(5, int(self.phase_slot_var.get())))
+        except Exception:
+            return 1
+
+    def get_selected_phase(self) -> str:
+        """Return selected challenge phase."""
+        value = self.phase_var.get().strip()
+        return value if value in ("Phase 1", "Phase 2") else "Phase 1"
+
+    def set_selected_phase(self, slot_id: int, phase: str) -> None:
+        """Update the UI phase selector from persisted account state."""
+        try:
+            self.phase_slot_var.set(str(max(1, min(5, int(slot_id)))))
+        except Exception:
+            self.phase_slot_var.set("1")
+        self.phase_var.set("Phase 2" if str(phase).strip().lower() == "phase 2" else "Phase 1")
+        self._refresh_phase_badge()
+
+    def _on_phase_selection_changed(self) -> None:
+        self._refresh_phase_badge()
+        self.command_callback(
+            "phase_changed",
+            slot_id=self.get_selected_slot(),
+            phase=self.get_selected_phase(),
+        )
+
+    def _refresh_phase_badge(self) -> None:
+        phase = self.get_selected_phase()
+        if phase == "Phase 2":
+            self.phase_badge.configure(text="PHASE 2 ACTIVE", fg_color="#166534", text_color="#dcfce7")
+        else:
+            self.phase_badge.configure(text="PHASE 1 ACTIVE", fg_color="#1e3a8a", text_color="#dbeafe")
+
     def set_recovery_estimate(self, lot: float, target: float) -> None:
         """Update the UI with recovery estimate values."""
         try:
@@ -308,10 +386,22 @@ class TradingControlsWidget(ctk.CTkFrame):
         try:
             self.buy_btn.configure(state=state)
             self.sell_btn.configure(state=state)
+            self.phase_slot_menu.configure(state=state)
+            self.phase_menu.configure(state=state)
             self.symbol_input.configure(state=state)
             self.lot_input.configure(state=state)
             self.tp_input.configure(state=state)
             self.sl_input.configure(state=state)
+        except Exception:
+            pass
+
+    def set_overlay_status(self, text: str) -> None:
+        """Display a short overlay/status message (e.g., 'Injecting 8.4 Lots...')."""
+        try:
+            if not text:
+                self.inject_status_label.configure(text="")
+            else:
+                self.inject_status_label.configure(text=text)
         except Exception:
             pass
 
@@ -518,9 +608,13 @@ class AccountGridWidget(ctk.CTkFrame):
         if account:
             acc_text = f"Account: {account.account_number}"
             phase_text = f"({account.phase.value})"
+            phase_color = "#166534" if account.phase.value == "Phase 2" else "#1e3a8a"
+            phase_label_text = account.phase.value.upper()
         else:
             acc_text = "Not configured"
             phase_text = ""
+            phase_color = "#444444"
+            phase_label_text = "UNSET"
         
         acc_label = ctk.CTkLabel(
             info_frame,
@@ -530,8 +624,21 @@ class AccountGridWidget(ctk.CTkFrame):
         )
         acc_label.pack(side="left", padx=10)
 
+        phase_badge = ctk.CTkLabel(
+            info_frame,
+            text=phase_label_text,
+            font=("Arial", 9, "bold"),
+            fg_color=phase_color,
+            text_color="#e5e7eb",
+            corner_radius=6,
+            padx=8,
+            pady=2,
+        )
+        phase_badge.pack(side="right", padx=6)
+
         # keep references for updates
         slot_frame._acc_label = acc_label
+        slot_frame._phase_badge = phase_badge
         slot_frame._active_var = active_var
         slot_frame._active_check = active_check
 
@@ -559,11 +666,17 @@ class AccountGridWidget(ctk.CTkFrame):
                     display = f"{acc_text} {phase_text} {balance_text}".strip()
                     try:
                         slot_frame._acc_label.configure(text=display)
+                        is_phase_2 = account.phase.value == "Phase 2"
+                        slot_frame._phase_badge.configure(
+                            text=account.phase.value.upper(),
+                            fg_color="#166534" if is_phase_2 else "#1e3a8a",
+                        )
                     except Exception:
                         pass
                 else:
                     try:
                         slot_frame._acc_label.configure(text="Not configured")
+                        slot_frame._phase_badge.configure(text="UNSET", fg_color="#444444")
                     except Exception:
                         pass
         except Exception:

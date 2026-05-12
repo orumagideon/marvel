@@ -18,6 +18,7 @@ from app.recovery_engine.prop_risk_engine import (
 from app.execution_engine.sync_executor import SynchronizedExecutionEngine, TradeType
 from app.risk_management.safety_monitor import RiskManagementSystem
 from app.utils.config import get_config
+from typing import Any
 
 
 class MavelCoreSystem:
@@ -38,6 +39,14 @@ class MavelCoreSystem:
         self.prop_risk_engine = PropFirmRiskEngine()
         self.execution_engine = SynchronizedExecutionEngine()
         self.risk_manager = RiskManagementSystem()
+        # Optional Match-Trader bridge (lazy started by UI or system operator)
+        self.match_trader_bridge: Optional[Any] = None
+        try:
+            from app.browser_bridge.match_trader_bridge import MatchTraderBridge
+            self.match_trader_bridge = MatchTraderBridge()
+        except Exception:
+            # Bridge optional; Playwright may not be installed in some environments
+            self.match_trader_bridge = None
         
         # State
         self.is_running = False
@@ -104,7 +113,9 @@ class MavelCoreSystem:
     
     async def execute_buy_order(self, symbol: str, lot_size: float,
                                use_hedge: bool = True, use_maven: bool = True,
-                               tp_pips: float = None, sl_pips: float = None) -> Tuple[bool, Dict[str, Any]]:
+                               tp_pips: float = None, sl_pips: float = None,
+                               selected_slot_id: Optional[int] = None,
+                               selected_phase: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
         """
         Execute synchronized BUY across active Maven accounts and hedge
         
@@ -116,23 +127,51 @@ class MavelCoreSystem:
         Returns:
             Tuple of (success, execution_results)
         """
-        return await self._execute_order(symbol, lot_size, TradeType.BUY, use_hedge, use_maven, tp_pips=tp_pips, sl_pips=sl_pips)
+        return await self._execute_order(
+            symbol,
+            lot_size,
+            TradeType.BUY,
+            use_hedge,
+            use_maven,
+            tp_pips=tp_pips,
+            sl_pips=sl_pips,
+            selected_slot_id=selected_slot_id,
+            selected_phase=selected_phase,
+        )
     
     async def execute_sell_order(self, symbol: str, lot_size: float,
                                 use_hedge: bool = True, use_maven: bool = True,
-                                tp_pips: float = None, sl_pips: float = None) -> Tuple[bool, Dict[str, Any]]:
+                                tp_pips: float = None, sl_pips: float = None,
+                                selected_slot_id: Optional[int] = None,
+                                selected_phase: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
         """Execute synchronized SELL across active Maven accounts and hedge"""
-        return await self._execute_order(symbol, lot_size, TradeType.SELL, use_hedge, use_maven, tp_pips=tp_pips, sl_pips=sl_pips)
+        return await self._execute_order(
+            symbol,
+            lot_size,
+            TradeType.SELL,
+            use_hedge,
+            use_maven,
+            tp_pips=tp_pips,
+            sl_pips=sl_pips,
+            selected_slot_id=selected_slot_id,
+            selected_phase=selected_phase,
+        )
     
     async def _execute_order(self, symbol: str, lot_size: float, 
                             trade_type: TradeType, use_hedge: bool, use_maven: bool,
-                            tp_pips: float = None, sl_pips: float = None) -> Tuple[bool, Dict[str, Any]]:
+                            tp_pips: float = None, sl_pips: float = None,
+                            selected_slot_id: Optional[int] = None,
+                            selected_phase: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
         """Internal order execution with validation"""
         try:
             # Pre-execution validation
             active_accounts = self.account_manager.get_active_accounts() if use_maven else []
             if not active_accounts and not (use_hedge and self.hedge_enabled):
                 return (False, {"error": "No active accounts selected and hedge disabled"})
+
+            slot_id = selected_slot_id or self.account_manager.selected_account_slot or (active_accounts[0].slot_id if active_accounts else 1)
+            phase_enum = self.resolve_phase_for_slot(slot_id, selected_phase)
+            active_phase = phase_enum.value
             
             # Validate spread
             if not self.risk_manager.validate_spread(symbol):
@@ -143,11 +182,29 @@ class MavelCoreSystem:
             hedge_lot_override = None
             if use_hedge and self.hedge_enabled:
                 if self.mt5_manager.is_connected(MT5InstanceType.HEDGE_ACCOUNT):
-                    # If auto-recovery enabled, compute suggested hedge lot and target
+                    # If auto-recovery enabled, compute phase-aware hedge lot and target
                     if self.auto_recovery_enabled:
                         try:
-                            est_lot, est_target = self.get_recovery_target()
-                            hedge_lot_override = float(est_lot)
+                            plan = self.calculate_dynamic_hedge_plan(
+                                {
+                                    "symbol": symbol,
+                                    "stop_loss_pips": float(sl_pips) if sl_pips is not None else 20.0,
+                                    "take_profit_pips": float(tp_pips) if tp_pips is not None else 10.0,
+                                    "desired_surplus": 0.0,
+                                    "risk_per_trade_pct": 0.5,
+                                    "recovery_mode": self.current_recovery_mode,
+                                    "phase": active_phase,
+                                    "selected_slot_id": slot_id,
+                                    "profit_target_pct": self.account_manager.get_phase_profit_target_pct(phase_enum),
+                                    "account_size": float(self.prop_risk_engine.current_config.account_size),
+                                    "purchase_fee": float(self.prop_risk_engine.current_config.purchase_fee),
+                                    "daily_drawdown_pct": float(self.prop_risk_engine.current_config.daily_drawdown_pct),
+                                    "overall_drawdown_pct": float(self.prop_risk_engine.current_config.overall_drawdown_pct),
+                                    "max_lots_allowed": float(self.prop_risk_engine.current_config.max_lots_allowed),
+                                    "profit_split_pct": float(self.prop_risk_engine.current_config.profit_split_pct),
+                                }
+                            )
+                            hedge_lot_override = float(plan.get("hedge_lot_size", 0.0))
                         except Exception:
                             hedge_lot_override = None
 
@@ -160,10 +217,25 @@ class MavelCoreSystem:
             maven_accounts = [
                 {
                     "account_number": acc.account_number,
+                    "slot_id": acc.slot_id,
                     "phase": acc.phase.value
                 }
                 for acc in active_accounts
             ]
+
+            self.logger.log_trade(
+                {
+                    "action": "phase_aware_dispatch",
+                    "symbol": symbol,
+                    "direction": trade_type.value,
+                    "selected_slot": slot_id,
+                    "active_phase": active_phase,
+                    "lot_size": lot_size,
+                    "hedge_lot": hedge_lot_override,
+                    "maven_slots": [a.get("slot_id") for a in maven_accounts],
+                    "maven_phases": [a.get("phase") for a in maven_accounts],
+                }
+            )
             
             # Execute synchronized trade
             success, results = await self.execution_engine.execute_synchronized_trade(
@@ -174,8 +246,13 @@ class MavelCoreSystem:
                 hedge_instance_info=hedge_info,
                 tp_pips=tp_pips,
                 sl_pips=sl_pips,
-                hedge_lot=hedge_lot_override
+                hedge_lot=hedge_lot_override,
+                match_trader_bridge=self.match_trader_bridge
             )
+
+            if isinstance(results, dict):
+                results["active_phase"] = active_phase
+                results["selected_slot"] = slot_id
             
             return (success, results)
             
@@ -309,13 +386,43 @@ class MavelCoreSystem:
         self.config.set("prop_firm.saved_templates", self.prop_risk_engine.saved_templates)
         return True
 
+    def start_match_trader_bridge(self, url: str, headless: bool = True) -> Dict[str, Any]:
+        """Start the Match-Trader browser bridge synchronously.
+
+        This is a convenience wrapper callable from the UI.
+        """
+        if not self.match_trader_bridge:
+            return {"success": False, "error": "bridge_unavailable"}
+        try:
+            # Use asyncio.run to start the async bridge
+            return asyncio.run(self.match_trader_bridge.start(url=url, headless=headless))
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def calculate_dynamic_hedge_plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate funded + hedge lot sizes and risk projections."""
         symbol = str(payload.get("symbol", "US100")).strip().upper()
         stop_loss = float(payload.get("stop_loss_pips", 20.0))
         take_profit = float(payload.get("take_profit_pips", 10.0))
-        desired_surplus = float(payload.get("desired_surplus", 100.0))
+        selected_slot = int(payload.get("selected_slot_id", self.account_manager.selected_account_slot or 1))
+        phase_enum = self.resolve_phase_for_slot(selected_slot, payload.get("phase"))
+        phase_profit_target = self.account_manager.get_phase_profit_target_pct(phase_enum)
+        phase_default_surplus = self.account_manager.get_phase_recovery_surplus(phase_enum)
+        desired_surplus = float(payload.get("desired_surplus", phase_default_surplus))
+        if desired_surplus <= 0:
+            desired_surplus = phase_default_surplus
         risk_per_trade = float(payload.get("risk_per_trade_pct", 0.5))
+
+        config = PropFirmChallengeConfig(
+            account_size=float(payload.get("account_size", self.prop_risk_engine.current_config.account_size)),
+            purchase_fee=float(payload.get("purchase_fee", self.prop_risk_engine.current_config.purchase_fee)),
+            profit_target_pct=float(payload.get("profit_target_pct", phase_profit_target)),
+            daily_drawdown_pct=float(payload.get("daily_drawdown_pct", self.prop_risk_engine.current_config.daily_drawdown_pct)),
+            overall_drawdown_pct=float(payload.get("overall_drawdown_pct", self.prop_risk_engine.current_config.overall_drawdown_pct)),
+            max_lots_allowed=float(payload.get("max_lots_allowed", self.prop_risk_engine.current_config.max_lots_allowed)),
+            profit_split_pct=float(payload.get("profit_split_pct", self.prop_risk_engine.current_config.profit_split_pct)),
+            leverage=float(payload.get("leverage", self.prop_risk_engine.current_config.leverage)),
+        )
 
         active_fees = [
             float(acc.get("challenge_fee", 0.0))
@@ -338,8 +445,81 @@ class MavelCoreSystem:
             desired_surplus=desired_surplus,
             risk_per_trade_pct=risk_per_trade,
             recovery_mode=mode,
+            config=config,
         )
-        return result.to_dict()
+        out = result.to_dict()
+
+        # Phase 2 requires less target distance; reduce hedge exposure time accordingly.
+        if phase_enum == TradingPhase.PHASE_2:
+            out["hedge_lot_size"] = round(max(0.01, float(out.get("hedge_lot_size", 0.0)) * 0.90), 2)
+
+        out["phase"] = phase_enum.value
+        out["selected_slot"] = selected_slot
+        out["phase_profit_target_pct"] = phase_profit_target
+        out["phase_recovery_surplus"] = desired_surplus
+        return out
+
+    def resolve_phase_for_slot(self, slot_id: int, phase_text: Optional[str] = None) -> TradingPhase:
+        """Resolve effective phase from optional UI override or persisted slot state."""
+        if phase_text:
+            normalized = str(phase_text).strip().lower()
+            if normalized == "phase 2":
+                return TradingPhase.PHASE_2
+            if normalized == "phase 1":
+                return TradingPhase.PHASE_1
+        return self.account_manager.get_account_phase(slot_id)
+
+    def pre_trade_phase_check(self, slot_id: int, selected_phase: Optional[str]) -> Dict[str, Any]:
+        """Check whether live balance suggests a phase transition not reflected in UI."""
+        phase_enum = self.resolve_phase_for_slot(slot_id, selected_phase)
+        acct = self.mt5_manager.get_account_info(MT5InstanceType.MAVEN_FLEET) or {}
+        balance = float(acct.get("balance", 0.0) or 0.0)
+        base_size = float(self.prop_risk_engine.current_config.account_size)
+        gain_pct = ((balance - base_size) / max(base_size, 1.0)) * 100.0 if balance > 0 else 0.0
+
+        warning = False
+        reason = ""
+        if phase_enum == TradingPhase.PHASE_1 and gain_pct >= 8.0:
+            warning = True
+            reason = (
+                f"Slot {slot_id} balance indicates >=8% progress ({gain_pct:.2f}%). "
+                "Consider switching to Phase 2 before placing this trade."
+            )
+
+        return {
+            "slot_id": slot_id,
+            "selected_phase": phase_enum.value,
+            "balance": balance,
+            "gain_pct": round(gain_pct, 2),
+            "warning": warning,
+            "message": reason,
+        }
+
+    def set_slot_phase(self, slot_id: int, phase_text: str) -> Dict[str, Any]:
+        """Persist slot phase and return phase-aware hedge refresh values."""
+        self.account_manager.select_account(slot_id)
+        updated = self.account_manager.set_account_phase_by_text(slot_id, phase_text)
+        phase_enum = self.resolve_phase_for_slot(slot_id, phase_text)
+        plan = self.calculate_dynamic_hedge_plan(
+            {
+                "selected_slot_id": slot_id,
+                "phase": phase_enum.value,
+                "symbol": "US100",
+                "stop_loss_pips": 20.0,
+                "take_profit_pips": 10.0,
+                "risk_per_trade_pct": 0.5,
+                "recovery_mode": self.current_recovery_mode,
+                "desired_surplus": self.account_manager.get_phase_recovery_surplus(phase_enum),
+            }
+        )
+        return {
+            "updated": updated,
+            "slot_id": slot_id,
+            "phase": phase_enum.value,
+            "profit_target_pct": self.account_manager.get_phase_profit_target_pct(phase_enum),
+            "hedge_lot_size": plan.get("hedge_lot_size", 0.0),
+            "recovery_target": plan.get("recovery_target", 0.0),
+        }
 
     def get_drawdown_guardrail(self, account: int) -> Dict[str, Any]:
         """Return drawdown usage and whether auto-protection should engage."""
@@ -383,6 +563,90 @@ class MavelCoreSystem:
             target_amount=target,
             profit_achieved=profit
         )
+    
+    async def check_and_trigger_auto_stop(self, 
+                                         symbol: str = "USTECH",
+                                         recovery_target: float = 110.0) -> Dict[str, Any]:
+        """
+        Check if Exness hedge account has reached recovery profit target.
+        If target is hit, automatically close all corresponding Maven positions.
+        
+        This is the AUTO-STOP mechanism for the Mirror Protocol:
+        - When hedge side hits recovery target (covers fee + surplus + drawdown)
+        - Immediately close all Maven positions for that symbol
+        - "Lock in" the profitable cycle
+        
+        Args:
+            symbol: Trading symbol to check/close (default: USTECH)
+            recovery_target: Profit target for hedge to trigger auto-stop (default: $110)
+        
+        Returns:
+            Dictionary with auto-stop status and results
+        """
+        try:
+            result = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "recovery_target": recovery_target,
+                "auto_stop_triggered": False,
+                "hedge_profit": None,
+                "maven_positions_closed": 0,
+                "details": None
+            }
+            
+            # Get hedge account info
+            hedge_status = self.mt5_manager.get_status(MT5InstanceType.HEDGE_ACCOUNT)
+            if not hedge_status.get("is_connected"):
+                result["details"] = "Hedge account not connected"
+                self.logger.warning("[AUTO-STOP] Hedge account not connected")
+                return result
+            
+            # Import MT5 to get positions
+            import MetaTrader5 as mt5
+            
+            # Get hedge account's positions for the symbol
+            hedge_positions = mt5.positions_get(symbol=symbol)
+            if not hedge_positions:
+                result["details"] = f"No hedge positions found for {symbol}"
+                return result
+            
+            # Calculate total hedge P/L for the symbol
+            total_hedge_profit = 0.0
+            for position in hedge_positions:
+                total_hedge_profit += position.profit
+            
+            result["hedge_profit"] = round(total_hedge_profit, 2)
+            
+            # Check if recovery target is hit
+            if total_hedge_profit >= recovery_target:
+                result["auto_stop_triggered"] = True
+                self.logger.info(f"[AUTO-STOP] Recovery target HIT! Hedge profit: ${total_hedge_profit:.2f} >= ${recovery_target:.2f}")
+                
+                # Close all Maven positions for this symbol
+                close_results = await self.execution_engine.close_maven_positions_by_symbol(symbol)
+                result["maven_positions_closed"] = close_results.get("closed_count", 0)
+                result["details"] = f"Auto-stop triggered: Closed {close_results.get('closed_count', 0)} Maven positions"
+                
+                # Log the event
+                self.logger.log_risk_event("AUTO_STOP_TRIGGERED", {
+                    "timestamp": datetime.now().isoformat(),
+                    "symbol": symbol,
+                    "hedge_profit": total_hedge_profit,
+                    "recovery_target": recovery_target,
+                    "maven_closed": close_results.get("closed_count", 0)
+                })
+            else:
+                result["details"] = f"Target not reached: ${total_hedge_profit:.2f} < ${recovery_target:.2f}"
+                self.logger.debug(f"[AUTO-STOP] Target check: ${total_hedge_profit:.2f} < ${recovery_target:.2f}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.log_error(e, "Auto-stop check error")
+            return {
+                "error": str(e),
+                "auto_stop_triggered": False
+            }
     
     def shutdown(self) -> None:
         """Shutdown system and disconnect all MT5 instances"""

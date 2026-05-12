@@ -4,11 +4,12 @@ Professional SaaS-style trading dashboard with CustomTkinter
 """
 
 import customtkinter as ctk
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, Tuple, List
 import asyncio
 import csv
 import json
 import threading
+import tkinter.messagebox as messagebox
 from datetime import datetime
 from pathlib import Path
 from app.core.orchestrator import get_system
@@ -48,14 +49,19 @@ class MarvelDashboard(ctk.CTk):
         self.maven_password_var = ctk.StringVar(value="")
         self.maven_server_var = ctk.StringVar(value="")
         self.maven_remember_var = ctk.BooleanVar(value=True)
+        self.maven_profile_var = ctk.StringVar(value="No saved logins")
 
         self.hedge_terminal_var = ctk.StringVar(value=self.config.get("mt5.hedge_terminal_path", ""))
         self.hedge_account_var = ctk.StringVar(value="")
         self.hedge_password_var = ctk.StringVar(value="")
         self.hedge_server_var = ctk.StringVar(value="")
         self.hedge_remember_var = ctk.BooleanVar(value=True)
+        self.hedge_profile_var = ctk.StringVar(value="No saved logins")
 
-        self.auto_connect_var = ctk.BooleanVar(value=self.config.get("ui.auto_connect_on_startup", True))
+        self._saved_login_profile_maps: Dict[MT5InstanceType, Dict[str, str]] = {
+            MT5InstanceType.MAVEN_FLEET: {},
+            MT5InstanceType.HEDGE_ACCOUNT: {},
+        }
         self._resize_after_id = None
         self._layout_mode = None
         self.current_risk_mode = "balanced"
@@ -79,9 +85,6 @@ class MarvelDashboard(ctk.CTk):
         # Keep the dashboard responsive as the window resizes
         self.bind("<Configure>", self._on_window_configure)
 
-        # Attempt auto-connect after the UI is visible
-        self.after(750, self._auto_connect_saved_instances)
-        
         self.logger.info("Marvel Dashboard initialized")
     
     def _create_layout(self) -> None:
@@ -517,8 +520,10 @@ class MarvelDashboard(ctk.CTk):
             password_var=self.maven_password_var,
             server_var=self.maven_server_var,
             remember_var=self.maven_remember_var,
+            profile_var=self.maven_profile_var,
             connect_callback=self._connect_maven,
-            instance_type=MT5InstanceType.MAVEN_FLEET
+            instance_type=MT5InstanceType.MAVEN_FLEET,
+            clear_callback=self._clear_maven_credentials
         )
 
         self.hedge_login_card = self._create_login_card(
@@ -531,22 +536,18 @@ class MarvelDashboard(ctk.CTk):
             password_var=self.hedge_password_var,
             server_var=self.hedge_server_var,
             remember_var=self.hedge_remember_var,
+            profile_var=self.hedge_profile_var,
             connect_callback=self._connect_hedge,
-            instance_type=MT5InstanceType.HEDGE_ACCOUNT
+            instance_type=MT5InstanceType.HEDGE_ACCOUNT,
+            clear_callback=self._clear_hedge_credentials
         )
 
-        self._load_saved_credentials()
-
-        ctk.CTkCheckBox(
-            self.login_panel,
-            text="Auto-connect on startup",
-            variable=self.auto_connect_var,
-            font=("Arial", 10)
-        ).grid(row=2, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 8))
+        self._refresh_saved_login_profiles()
+        self._reset_login_form_fields()
 
         ctk.CTkLabel(
             self.login_panel,
-            text="Saved credentials are stored in the encrypted vault and can auto-connect on startup.",
+            text="Saved logins are stored in the encrypted vault. Select one from the dropdown, then click Connect & Login.",
             font=("Arial", 9),
             text_color="#666666"
         ).grid(row=3, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 10))
@@ -562,8 +563,10 @@ class MarvelDashboard(ctk.CTk):
         password_var: ctk.StringVar,
         server_var: ctk.StringVar,
         remember_var: ctk.BooleanVar,
+        profile_var: ctk.StringVar,
         connect_callback: Callable[[], None],
-        instance_type: MT5InstanceType = None
+        instance_type: MT5InstanceType = None,
+        clear_callback: Optional[Callable[[], None]] = None
     ) -> ctk.CTkFrame:
         """Create one MT5 login card."""
         card = ctk.CTkFrame(parent, fg_color="#1a1a1a")
@@ -585,6 +588,27 @@ class MarvelDashboard(ctk.CTk):
         self._add_login_field(card, row_index, "Password", password_var, show="*")
         row_index += 1
         self._add_login_field(card, row_index, "Server", server_var)
+        row_index += 1
+
+        profile_frame = ctk.CTkFrame(card, fg_color="#1a1a1a")
+        profile_frame.grid(row=row_index, column=0, columnspan=2, sticky="ew", padx=15, pady=(4, 8))
+        profile_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            profile_frame,
+            text="Saved Login",
+            font=("Arial", 10),
+            text_color="#888"
+        ).grid(row=0, column=0, sticky="w")
+
+        profile_menu = ctk.CTkOptionMenu(
+            profile_frame,
+            values=["No saved logins"],
+            variable=profile_var,
+            command=lambda selected: self._load_login_profile(instance_type, selected)
+        )
+        profile_menu.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+
         row_index += 1
 
         options_frame = ctk.CTkFrame(card, fg_color="#1a1a1a")
@@ -627,6 +651,20 @@ class MarvelDashboard(ctk.CTk):
         )
         disconnect_btn.grid(row=row_index + 1, column=1, sticky="ew", padx=(6, 15), pady=(4, 14))
 
+        if clear_callback is not None:
+            clear_btn = ctk.CTkButton(
+                card,
+                text="Clear Saved",
+                font=("Arial", 11, "bold"),
+                fg_color="#7a2e2e",
+                hover_color="#9a3a3a",
+                command=clear_callback
+            )
+            clear_btn.grid(row=row_index + 2, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 14))
+
+        card._profile_menu = profile_menu  # type: ignore[attr-defined]
+        card._profile_var = profile_var  # type: ignore[attr-defined]
+        card._connect_btn = connect_btn  # type: ignore[attr-defined]
         card._status_label = status_label  # type: ignore[attr-defined]
         return card
 
@@ -642,64 +680,176 @@ class MarvelDashboard(ctk.CTk):
         entry = ctk.CTkEntry(parent, textvariable=variable, show=show)
         entry.grid(row=row, column=1, sticky="ew", padx=15, pady=4)
 
-    def _load_saved_credentials(self) -> None:
-        """Load saved login credentials and terminal paths into the form."""
+    def _get_saved_login_profile_prefix(self, instance_type: MT5InstanceType) -> str:
+        if instance_type == MT5InstanceType.MAVEN_FLEET:
+            return "dashboard_maven_login"
+        return "dashboard_hedge_login"
+
+    def _make_profile_label(self, profile_id: str, data: Dict[str, Any]) -> str:
+        account = data.get("account_number", "")
+        server = data.get("server", "")
+        saved_at = data.get("saved_at") or data.get("created_at") or profile_id
+        return f"{account} | {server} | {saved_at}"
+
+    def _get_saved_login_profile_labels(self, instance_type: MT5InstanceType) -> List[str]:
+        prefix = self._get_saved_login_profile_prefix(instance_type)
+        profile_map: Dict[str, str] = {}
+        labels: List[str] = []
+
         try:
-            maven_saved = self.credentials_vault.get_account("dashboard_maven_login") or {}
-            hedge_saved = self.credentials_vault.get_account("dashboard_hedge_login") or {}
-
-            if maven_saved:
-                self.maven_account_var.set(str(maven_saved.get("account_number", "")))
-                self.maven_password_var.set(maven_saved.get("password", ""))
-                self.maven_server_var.set(maven_saved.get("server", ""))
-                self.maven_terminal_var.set(maven_saved.get("terminal_path", self.maven_terminal_var.get()))
-
-            if hedge_saved:
-                self.hedge_account_var.set(str(hedge_saved.get("account_number", "")))
-                self.hedge_password_var.set(hedge_saved.get("password", ""))
-                self.hedge_server_var.set(hedge_saved.get("server", ""))
-                self.hedge_terminal_var.set(hedge_saved.get("terminal_path", self.hedge_terminal_var.get()))
+            for account_id in sorted(self.credentials_vault.list_accounts()):
+                if not account_id.startswith(prefix):
+                    continue
+                data = self.credentials_vault.get_account(account_id) or {}
+                label = self._make_profile_label(account_id, data)
+                profile_map[label] = account_id
+                labels.append(label)
         except Exception as e:
-            self.logger.debug(f"Failed to load saved credentials: {str(e)}")
+            self.logger.debug(f"Failed to load saved login profiles: {str(e)}")
 
-    def _auto_connect_saved_instances(self) -> None:
-        """Automatically connect saved MT5 instances after startup if enabled."""
+        self._saved_login_profile_maps[instance_type] = profile_map
+        return labels or ["No saved logins"]
+
+    def _refresh_saved_login_profiles(self) -> None:
+        """Refresh dropdown menus with the latest saved logins."""
         try:
-            self.config.set("ui.auto_connect_on_startup", self.auto_connect_var.get())
+            maven_values = self._get_saved_login_profile_labels(MT5InstanceType.MAVEN_FLEET)
+            hedge_values = self._get_saved_login_profile_labels(MT5InstanceType.HEDGE_ACCOUNT)
 
-            if not self.auto_connect_var.get():
+            if hasattr(self, "maven_login_card") and hasattr(self.maven_login_card, "_profile_menu"):
+                self.maven_login_card._profile_menu.configure(values=maven_values)  # type: ignore[attr-defined]
+                if self.maven_profile_var.get() not in maven_values:
+                    self.maven_profile_var.set(maven_values[0])
+
+            if hasattr(self, "hedge_login_card") and hasattr(self.hedge_login_card, "_profile_menu"):
+                self.hedge_login_card._profile_menu.configure(values=hedge_values)  # type: ignore[attr-defined]
+                if self.hedge_profile_var.get() not in hedge_values:
+                    self.hedge_profile_var.set(hedge_values[0])
+        except Exception as e:
+            self.logger.debug(f"Failed to refresh saved login profiles: {str(e)}")
+
+    def _reset_login_form_fields(self) -> None:
+        """Clear visible login fields so saved credentials are not prefilled on restart."""
+        self.maven_account_var.set("")
+        self.maven_password_var.set("")
+        self.maven_server_var.set("")
+        self.maven_profile_var.set("No saved logins")
+
+        self.hedge_account_var.set("")
+        self.hedge_password_var.set("")
+        self.hedge_server_var.set("")
+        self.hedge_profile_var.set("No saved logins")
+
+    def _load_login_profile(self, instance_type: MT5InstanceType, profile_label: str) -> None:
+        """Load a saved login profile into the visible form fields."""
+        try:
+            profile_id = self._saved_login_profile_maps.get(instance_type, {}).get(profile_label)
+            if not profile_id:
                 return
 
-            maven_saved = self.credentials_vault.get_account("dashboard_maven_login") or {}
-            hedge_saved = self.credentials_vault.get_account("dashboard_hedge_login") or {}
-
-            if maven_saved.get("account_number") and maven_saved.get("password") and maven_saved.get("server"):
-                self._connect_instance(
-                    instance_type=MT5InstanceType.MAVEN_FLEET,
-                    terminal_path=maven_saved.get("terminal_path", self.maven_terminal_var.get()).strip(),
-                    account_text=str(maven_saved.get("account_number", "")).strip(),
-                    password=maven_saved.get("password", ""),
-                    server=maven_saved.get("server", "").strip(),
-                    status_label=self.maven_login_card._status_label,  # type: ignore[attr-defined]
-                    success_prefix="Maven",
-                    remember=True,
-                    credential_id="dashboard_maven_login"
-                )
-
-            if hedge_saved.get("account_number") and hedge_saved.get("password") and hedge_saved.get("server"):
-                self._connect_instance(
-                    instance_type=MT5InstanceType.HEDGE_ACCOUNT,
-                    terminal_path=hedge_saved.get("terminal_path", self.hedge_terminal_var.get()).strip(),
-                    account_text=str(hedge_saved.get("account_number", "")).strip(),
-                    password=hedge_saved.get("password", ""),
-                    server=hedge_saved.get("server", "").strip(),
-                    status_label=self.hedge_login_card._status_label,  # type: ignore[attr-defined]
-                    success_prefix="Hedge",
-                    remember=True,
-                    credential_id="dashboard_hedge_login"
-                )
+            profile = self.credentials_vault.get_account(profile_id) or {}
+            if instance_type == MT5InstanceType.MAVEN_FLEET:
+                self.maven_account_var.set(str(profile.get("account_number", "")))
+                self.maven_password_var.set(profile.get("password", ""))
+                self.maven_server_var.set(profile.get("server", ""))
+                terminal_path = profile.get("terminal_path")
+                if terminal_path:
+                    self.maven_terminal_var.set(terminal_path)
+                self._set_login_status(self.maven_login_card._status_label, f"Loaded: {profile_label}", "#00ffcc")  # type: ignore[attr-defined]
+            else:
+                self.hedge_account_var.set(str(profile.get("account_number", "")))
+                self.hedge_password_var.set(profile.get("password", ""))
+                self.hedge_server_var.set(profile.get("server", ""))
+                terminal_path = profile.get("terminal_path")
+                if terminal_path:
+                    self.hedge_terminal_var.set(terminal_path)
+                self._set_login_status(self.hedge_login_card._status_label, f"Loaded: {profile_label}", "#00ffcc")  # type: ignore[attr-defined]
         except Exception as e:
-            self.logger.debug(f"Auto-connect failed: {str(e)}")
+            self.logger.debug(f"Failed to load login profile: {str(e)}")
+
+    def _clear_instance_credentials(
+        self,
+        credential_id: str,
+        terminal_var: ctk.StringVar,
+        account_var: ctk.StringVar,
+        password_var: ctk.StringVar,
+        server_var: ctk.StringVar,
+        remember_var: ctk.BooleanVar,
+        status_label,
+    ) -> None:
+        """Clear a stored login profile and reset the visible fields."""
+        try:
+            removed = self.credentials_vault.remove_account(credential_id)
+            terminal_var.set("")
+            account_var.set("")
+            password_var.set("")
+            server_var.set("")
+            remember_var.set(False)
+            self._set_login_status(status_label, "Credentials cleared", "#ff8800")
+            if removed:
+                self.logger.info(f"Cleared saved credentials for {credential_id}")
+        except Exception as e:
+            self.logger.debug(f"Failed to clear credentials for {credential_id}: {str(e)}")
+
+    def _clear_maven_credentials(self) -> None:
+        self._clear_selected_login_profile(
+            MT5InstanceType.MAVEN_FLEET,
+            self.maven_terminal_var,
+            self.maven_account_var,
+            self.maven_password_var,
+            self.maven_server_var,
+            self.maven_profile_var,
+            self.maven_remember_var,
+            getattr(self.maven_login_card, "_status_label", None)
+        )
+
+    def _clear_hedge_credentials(self) -> None:
+        self._clear_selected_login_profile(
+            MT5InstanceType.HEDGE_ACCOUNT,
+            self.hedge_terminal_var,
+            self.hedge_account_var,
+            self.hedge_password_var,
+            self.hedge_server_var,
+            self.hedge_profile_var,
+            self.hedge_remember_var,
+            getattr(self.hedge_login_card, "_status_label", None)
+        )
+
+    def _clear_selected_login_profile(
+        self,
+        instance_type: MT5InstanceType,
+        terminal_var: ctk.StringVar,
+        account_var: ctk.StringVar,
+        password_var: ctk.StringVar,
+        server_var: ctk.StringVar,
+        profile_var: ctk.StringVar,
+        remember_var: ctk.BooleanVar,
+        status_label,
+    ) -> None:
+        """Clear the selected saved profile for an MT5 instance."""
+        try:
+            profile_label = profile_var.get()
+            profile_id = self._saved_login_profile_maps.get(instance_type, {}).get(profile_label)
+            prefix = self._get_saved_login_profile_prefix(instance_type)
+
+            if profile_id:
+                self.credentials_vault.remove_account(profile_id)
+                self.logger.info(f"Cleared saved login profile: {profile_id}")
+            else:
+                for account_id in list(self.credentials_vault.list_accounts()):
+                    if account_id.startswith(prefix):
+                        self.credentials_vault.remove_account(account_id)
+
+            terminal_var.set("")
+            account_var.set("")
+            password_var.set("")
+            server_var.set("")
+            profile_var.set("No saved logins")
+            remember_var.set(False)
+            self._set_login_status(status_label, "Credentials cleared", "#ff8800")
+            self._refresh_saved_login_profiles()
+        except Exception as e:
+            self.logger.debug(f"Failed to clear credentials: {str(e)}")
 
     def _persist_credentials(
         self,
@@ -721,7 +871,8 @@ class MarvelDashboard(ctk.CTk):
                     "account_number": account,
                     "password": password,
                     "server": server,
-                    "terminal_path": terminal_path
+                    "terminal_path": terminal_path,
+                    "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
             )
         except Exception as e:
@@ -729,7 +880,7 @@ class MarvelDashboard(ctk.CTk):
 
     def _connect_maven(self) -> None:
         """Connect and log in the Maven MT5 instance."""
-        self._connect_instance(
+        self._connect_instance_async(
             instance_type=MT5InstanceType.MAVEN_FLEET,
             terminal_path=self.maven_terminal_var.get().strip(),
             account_text=self.maven_account_var.get().strip(),
@@ -738,12 +889,12 @@ class MarvelDashboard(ctk.CTk):
             status_label=self.maven_login_card._status_label,  # type: ignore[attr-defined]
             success_prefix="Maven",
             remember=self.maven_remember_var.get(),
-            credential_id="dashboard_maven_login"
+            profile_var=self.maven_profile_var
         )
 
     def _connect_hedge(self) -> None:
         """Connect and log in the hedge MT5 instance."""
-        self._connect_instance(
+        self._connect_instance_async(
             instance_type=MT5InstanceType.HEDGE_ACCOUNT,
             terminal_path=self.hedge_terminal_var.get().strip(),
             account_text=self.hedge_account_var.get().strip(),
@@ -752,10 +903,10 @@ class MarvelDashboard(ctk.CTk):
             status_label=self.hedge_login_card._status_label,  # type: ignore[attr-defined]
             success_prefix="Hedge",
             remember=self.hedge_remember_var.get(),
-            credential_id="dashboard_hedge_login"
+            profile_var=self.hedge_profile_var
         )
 
-    def _connect_instance(
+    def _connect_instance_async(
         self,
         instance_type: MT5InstanceType,
         terminal_path: str,
@@ -765,42 +916,129 @@ class MarvelDashboard(ctk.CTk):
         status_label,
         success_prefix: str,
         remember: bool,
-        credential_id: str
+        profile_var: ctk.StringVar
     ) -> None:
-        """Shared connect/login flow for both MT5 instances."""
+        """Start the shared connect/login flow on a worker thread."""
+        self._set_login_status(status_label, f"{success_prefix} connecting...", "#ffcc66")
+        self._set_connect_buttons_enabled(False)
+
+        def worker() -> None:
+            result = self._connect_instance_sync(
+                instance_type=instance_type,
+                terminal_path=terminal_path,
+                account_text=account_text,
+                password=password,
+                server=server,
+                success_prefix=success_prefix,
+                remember=remember,
+                profile_var=profile_var,
+            )
+            self.after(0, lambda: self._apply_connect_result(status_label, result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _connect_instance_sync(
+        self,
+        instance_type: MT5InstanceType,
+        terminal_path: str,
+        account_text: str,
+        password: str,
+        server: str,
+        success_prefix: str,
+        remember: bool,
+        profile_var: ctk.StringVar,
+    ) -> Dict[str, Any]:
+        """Blocking connect/login logic executed outside the UI thread."""
         if not terminal_path:
-            self._set_login_status(status_label, f"{success_prefix} terminal path required", "#ff8800")
-            return
+            return {"success": False, "message": f"{success_prefix} terminal path required"}
 
         if not account_text.isdigit():
-            self._set_login_status(status_label, f"{success_prefix} account must be numeric", "#ff0000")
-            return
+            return {"success": False, "message": f"{success_prefix} account must be numeric"}
 
         if not password or not server:
-            self._set_login_status(status_label, f"{success_prefix} password and server required", "#ff0000")
-            return
+            return {"success": False, "message": f"{success_prefix} password and server required"}
 
         account = int(account_text)
 
         if instance_type == MT5InstanceType.MAVEN_FLEET:
             initialized = self.system.initialize_maven_instance(terminal_path)
             login_ok = initialized and self.system.login_maven_account(account, password, server)
+            config_key = "mt5.maven_terminal_path"
+            profile_prefix = "dashboard_maven_login"
         else:
             initialized = self.system.initialize_hedge_instance(terminal_path)
             login_ok = initialized and self.system.login_hedge_account(account, password, server)
+            config_key = "mt5.hedge_terminal_path"
+            profile_prefix = "dashboard_hedge_login"
 
-        if login_ok:
-            self._set_login_status(status_label, f"{success_prefix} connected", "#00ff88")
-            self._persist_credentials(credential_id, account, password, server, terminal_path, remember)
+        if not login_ok:
+            return {"success": False, "message": f"{success_prefix} login failed"}
 
+        profile_id = f"{profile_prefix}_{account}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if remember:
+            self._persist_credentials(
+                profile_id,
+                account,
+                password,
+                server,
+                terminal_path,
+                remember,
+            )
+
+        try:
+            self.config.set(config_key, terminal_path)
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "message": f"{success_prefix} connected",
+            "profile_id": profile_id,
+            "profile_var": profile_var,
+            "instance_type": instance_type,
+        }
+
+    def _apply_connect_result(self, status_label, result: Dict[str, Any]) -> None:
+        """Apply connect result on the UI thread."""
+        try:
+            self._set_connect_buttons_enabled(True)
+            if not result.get("success"):
+                self._set_login_status(status_label, result.get("message", "Login failed"), "#ff0000")
+                return
+
+            self._set_login_status(status_label, result.get("message", "Connected"), "#00ff88")
+            instance_type = result.get("instance_type")
+            profile_id = result.get("profile_id")
+            profile_var = result.get("profile_var")
+
+            self._refresh_saved_login_profiles()
             if instance_type == MT5InstanceType.MAVEN_FLEET:
-                self.config.set("mt5.maven_terminal_path", terminal_path)
-            else:
-                self.config.set("mt5.hedge_terminal_path", terminal_path)
+                selected = self._find_profile_label_for_id(MT5InstanceType.MAVEN_FLEET, profile_id)
+                if selected:
+                    self.maven_profile_var.set(selected)
+                    if hasattr(self, "maven_login_card") and hasattr(self.maven_login_card, "_profile_menu"):
+                        self.maven_login_card._profile_menu.configure(values=self._get_saved_login_profile_labels(MT5InstanceType.MAVEN_FLEET))  # type: ignore[attr-defined]
+            elif instance_type == MT5InstanceType.HEDGE_ACCOUNT:
+                selected = self._find_profile_label_for_id(MT5InstanceType.HEDGE_ACCOUNT, profile_id)
+                if selected:
+                    self.hedge_profile_var.set(selected)
+                    if hasattr(self, "hedge_login_card") and hasattr(self.hedge_login_card, "_profile_menu"):
+                        self.hedge_login_card._profile_menu.configure(values=self._get_saved_login_profile_labels(MT5InstanceType.HEDGE_ACCOUNT))  # type: ignore[attr-defined]
+
+            if profile_var is not None and profile_var.get() == "No saved logins":
+                profile_var.set(self._find_profile_label_for_id(instance_type, profile_id) or "No saved logins")
 
             self._refresh_connection_status()
-        else:
-            self._set_login_status(status_label, f"{success_prefix} login failed", "#ff0000")
+        except Exception as e:
+            self.logger.debug(f"Failed to apply connect result: {str(e)}")
+
+    def _find_profile_label_for_id(self, instance_type: MT5InstanceType, profile_id: Optional[str]) -> Optional[str]:
+        if not profile_id:
+            return None
+        for label, saved_id in self._saved_login_profile_maps.get(instance_type, {}).items():
+            if saved_id == profile_id:
+                return label
+        return None
 
     def _disconnect_instance(self, instance_type: MT5InstanceType, status_label) -> None:
         """Disconnect the given MT5 instance and refresh UI status."""
@@ -943,6 +1181,12 @@ class MarvelDashboard(ctk.CTk):
         
         self.trading_controls = TradingControlsWidget(scroll, self._on_trade_command)
         self.trading_controls.grid(row=1, column=0, sticky="nsew")
+        try:
+            default_slot = self.system.account_manager.selected_account_slot or 1
+            default_phase = self.system.account_manager.get_account_phase(default_slot).value
+            self.trading_controls.set_selected_phase(default_slot, default_phase)
+        except Exception:
+            pass
 
         challenge_label = ctk.CTkLabel(
             scroll,
@@ -971,14 +1215,82 @@ class MarvelDashboard(ctk.CTk):
     
     def _on_trade_command(self, command: str, *args, **kwargs) -> None:
         """Handle trading command from UI"""
+        if command == "phase_changed":
+            slot_id = int(kwargs.get("slot_id", self.trading_controls.get_selected_slot()))
+            phase = str(kwargs.get("phase", self.trading_controls.get_selected_phase()))
+            result = self.system.set_slot_phase(slot_id, phase)
+            self.trading_controls.set_recovery_estimate(
+                float(result.get("hedge_lot_size", 0.0)),
+                float(result.get("recovery_target", 0.0)),
+            )
+            try:
+                self.challenge_config.profit_target_pct.set(str(result.get("profit_target_pct", 8.0)))
+                self.challenge_config.desired_surplus.set(str(self.system.account_manager.get_phase_recovery_surplus(self.system.resolve_phase_for_slot(slot_id, phase))))
+            except Exception:
+                pass
+            self.engine_status_label.configure(
+                text=f"Engine: Slot {slot_id} {result.get('phase', phase)} | Hedge {float(result.get('hedge_lot_size', 0.0)):.2f}L",
+                text_color="#00ffcc",
+            )
+            return
+
         if command == "buy":
+            # Check latency before allowing trade
+            latency_ok, latency_msg = self._check_latency_for_trading()
+            if not latency_ok:
+                self.logger.warning(f"Trade blocked by latency: {latency_msg}")
+                # Show warning to user (could also disable button)
+                return
+
+            if not self._confirm_phase_check_before_trade():
+                return
+            
             tp, sl = self.trading_controls.get_tp_sl()
-            asyncio.run(self._execute_buy(tp, sl))
+            # If Match-Trader bridge is configured and any active account uses it,
+            # ensure the bridge session is active before proceeding and show overlay.
+            try:
+                bridge = getattr(self.system, "match_trader_bridge", None)
+                if bridge:
+                    # show overlay message
+                    self.trading_controls.set_overlay_status(f"Injecting {self.trading_controls.get_lot_size():.2f} Lots into Match-Trader...")
+                    if not bridge.is_session_active():
+                        self.trading_controls.set_overlay_status("")
+                        self.trading_controls.set_trading_enabled(True)
+                        self.logger.warning("Match-Trader bridge not active - trade blocked")
+                        return
+            except Exception:
+                pass
+
+            self._run_trade_coroutine(self._execute_buy(tp, sl))
+        
         elif command == "sell":
+            # Check latency before allowing trade
+            latency_ok, latency_msg = self._check_latency_for_trading()
+            if not latency_ok:
+                self.logger.warning(f"Trade blocked by latency: {latency_msg}")
+                # Show warning to user (could also disable button)
+                return
+
+            if not self._confirm_phase_check_before_trade():
+                return
+            
             tp, sl = self.trading_controls.get_tp_sl()
-            asyncio.run(self._execute_sell(tp, sl))
+            try:
+                bridge = getattr(self.system, "match_trader_bridge", None)
+                if bridge:
+                    self.trading_controls.set_overlay_status(f"Injecting {self.trading_controls.get_lot_size():.2f} Lots into Match-Trader...")
+                    if not bridge.is_session_active():
+                        self.trading_controls.set_overlay_status("")
+                        self.trading_controls.set_trading_enabled(True)
+                        self.logger.warning("Match-Trader bridge not active - trade blocked")
+                        return
+            except Exception:
+                pass
+
+            self._run_trade_coroutine(self._execute_sell(tp, sl))
+        
         elif command == "close_all":
-            asyncio.run(self._close_all())
+            self._run_trade_coroutine(self._close_all())
         elif command == "toggle_hedge":
             self.system.hedge_enabled = not self.system.hedge_enabled
         elif command == "toggle_recovery":
@@ -1051,6 +1363,88 @@ class MarvelDashboard(ctk.CTk):
             self.logger.debug(f"Challenge action error: {str(e)}")
             self.engine_status_label.configure(text="Engine: Error", text_color="#ff5555")
     
+    def _check_latency_for_trading(self) -> Tuple[bool, str]:
+        """
+        Check if latency is within acceptable range for trading
+        Kenya-specific: Returns (allowed, message)
+        
+        Latency Check:
+        - < 100ms: Green light (optimal)
+        - 100-250ms: Yellow (acceptable but suboptimal)
+        - > 250ms: RED (trading disabled due to Kenya ISP lag)
+        
+        Returns:
+            Tuple of (trading_allowed: bool, message: str)
+        """
+        try:
+            latency_status = self.system.mt5_manager.get_latency_status()
+            
+            if not latency_status.get("trading_allowed"):
+                max_latency = latency_status.get("max_latency_ms", 0)
+                msg = f"⚠️ Latency {max_latency:.0f}ms exceeds 250ms threshold (Kenya ISP lag detected) - Trading Disabled"
+                self.logger.warning(f"[LATENCY CHECK] {msg}")
+                return (False, msg)
+            
+            max_latency = latency_status.get("max_latency_ms", 0)
+            maven_latency = latency_status.get("maven", {}).get("latency_ms", 0)
+            exness_latency = latency_status.get("exness", {}).get("latency_ms", 0)
+            
+            # Log latency for monitoring
+            if max_latency > 100:
+                self.logger.info(f"[LATENCY] Suboptimal: Maven {maven_latency:.2f}ms, Exness {exness_latency:.2f}ms")
+            
+            msg = f"Latency OK: Maven {maven_latency:.0f}ms, Exness {exness_latency:.0f}ms"
+            return (True, msg)
+            
+        except Exception as e:
+            # If we can't check latency, allow trading but log the error
+            self.logger.warning(f"Latency check error: {str(e)}")
+            return (True, "Latency check unavailable")
+
+    def _confirm_phase_check_before_trade(self) -> bool:
+        """Warn when balance suggests phase transition but selector remains on old phase."""
+        try:
+            slot_id = self.trading_controls.get_selected_slot()
+            selected_phase = self.trading_controls.get_selected_phase()
+            check = self.system.pre_trade_phase_check(slot_id, selected_phase)
+            if not check.get("warning"):
+                return True
+
+            return messagebox.askyesno(
+                "Phase Confirmation",
+                f"{check.get('message')}\n\nProceed with current phase selection ({selected_phase})?",
+            )
+        except Exception:
+            return True
+
+    def _set_connect_buttons_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        try:
+            if hasattr(self, "maven_login_card") and hasattr(self.maven_login_card, "_connect_btn"):
+                self.maven_login_card._connect_btn.configure(state=state)  # type: ignore[attr-defined]
+            if hasattr(self, "hedge_login_card") and hasattr(self.hedge_login_card, "_connect_btn"):
+                self.hedge_login_card._connect_btn.configure(state=state)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _run_trade_coroutine(self, coro) -> None:
+        """Run trade coroutine off the UI thread and restore controls when done."""
+        self.trading_controls.set_trading_enabled(False)
+
+        def worker() -> None:
+            try:
+                asyncio.run(coro)
+            finally:
+                def restore():
+                    try:
+                        self.trading_controls.set_trading_enabled(True)
+                        self.trading_controls.set_overlay_status("")
+                    except Exception:
+                        pass
+                self.after(0, restore)
+
+        threading.Thread(target=worker, daemon=True).start()
+    
     async def _execute_buy(self, tp_pips: float = None, sl_pips: float = None) -> None:
         """Execute BUY order"""
         lot_size = self.trading_controls.get_lot_size()
@@ -1066,6 +1460,8 @@ class MarvelDashboard(ctk.CTk):
             use_maven=use_maven,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
+            selected_slot_id=self.trading_controls.get_selected_slot(),
+            selected_phase=self.trading_controls.get_selected_phase(),
         )
         
         if success:
@@ -1088,6 +1484,8 @@ class MarvelDashboard(ctk.CTk):
             use_maven=use_maven,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
+            selected_slot_id=self.trading_controls.get_selected_slot(),
+            selected_phase=self.trading_controls.get_selected_phase(),
         )
         
         if success:
