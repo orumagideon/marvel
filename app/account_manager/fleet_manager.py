@@ -5,7 +5,7 @@ Dynamic account matrix supporting 5+ slots with secure credential storage
 
 import json
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 from app.utils.logger import get_logger
@@ -191,6 +191,32 @@ class AccountManager:
         except Exception as e:
             self.logger.log_error(e, f"Failed to set account phase")
             return False
+
+    def set_account_phase_by_text(self, slot_id: int, phase_text: str) -> bool:
+        """Update account phase from UI text (Phase 1 / Phase 2)."""
+        normalized = str(phase_text).strip().lower()
+        if normalized == "phase 2":
+            return self.set_account_phase(slot_id, TradingPhase.PHASE_2)
+        return self.set_account_phase(slot_id, TradingPhase.PHASE_1)
+
+    def get_account_phase(self, slot_id: int) -> TradingPhase:
+        """Return slot phase, defaulting to Phase 1 when missing."""
+        account = self.accounts.get(slot_id)
+        if account and account.phase:
+            return account.phase
+        return TradingPhase.PHASE_1
+
+    def get_phase_profit_target_pct(self, phase: TradingPhase) -> float:
+        """Return challenge target percent by phase."""
+        return 5.0 if phase == TradingPhase.PHASE_2 else 8.0
+
+    def get_phase_recovery_surplus(self, phase: TradingPhase) -> float:
+        """Return default recovery surplus by phase.
+
+        Phase 1 uses higher surplus to cover progression risk to Phase 2.
+        Phase 2 uses lower surplus due to shorter funded path.
+        """
+        return 45.0 if phase == TradingPhase.PHASE_2 else 60.0
     
     def get_active_accounts(self) -> List[MavenAccount]:
         """Get list of accounts marked active for next execution"""
@@ -249,3 +275,83 @@ class AccountManager:
                 account.is_active = False
         self._save_accounts()
         self.logger.debug("Cleared all account active selections")
+    
+    def detect_phase_transitions(self) -> Dict[int, Tuple[TradingPhase, TradingPhase]]:
+        """
+        Detect accounts that have transitioned from Phase 1 to Phase 2 (Funded)
+        Returns dictionary of {slot_id: (old_phase, new_phase)}
+        
+        Called periodically to enable automatic Farming Mode when an account
+        reaches the Funded stage (Phase 2).
+        
+        Farming Mode: When an account transitions to Funded, reduce lot sizes to 0.1x
+        to maintain consistency requirements and reduce risk.
+        """
+        transitions = {}
+        # This method would be called with updated phase info from MT5
+        # For now, it's a template for integration with actual MT5 account checks
+        return transitions
+    
+    def is_farming_mode_enabled(self, slot_id: int) -> bool:
+        """
+        Check if an account should operate in farming mode
+        
+        Farming Mode is enabled when:
+        1. Account has transitioned from Phase 1 to Phase 2 (Funded)
+        2. Account is in profit and meeting consistency requirements
+        
+        Args:
+            slot_id: Account slot to check
+        
+        Returns:
+            True if farming mode should be active, False otherwise
+        """
+        account = self.accounts.get(slot_id)
+        if not account:
+            return False
+        
+        # Farming mode is active when in Phase 2 (Funded)
+        is_funded = account.phase == TradingPhase.PHASE_2
+        
+        if is_funded:
+            self.logger.debug(f"[FARMING MODE] Account slot {slot_id} is FUNDED - using 0.1x lot multiplier")
+        
+        return is_funded
+    
+    def get_farming_lot_multiplier(self, slot_id: int) -> float:
+        """
+        Get lot size multiplier for farming mode
+        
+        Args:
+            slot_id: Account slot ID
+        
+        Returns:
+            1.0 (normal) if Phase 1, 0.1 (farming) if Phase 2
+        """
+        account = self.accounts.get(slot_id)
+        if not account:
+            return 1.0
+        
+        if account.phase == TradingPhase.PHASE_2:
+            return 0.1  # 0.1x for farming mode
+        else:
+            return 1.0  # Normal size for Phase 1
+    
+    def apply_farming_multiplier(self, base_lot_size: float, slot_id: int) -> float:
+        """
+        Apply farming mode multiplier to lot size if applicable
+        
+        Args:
+            base_lot_size: Original lot size
+            slot_id: Account slot ID
+        
+        Returns:
+            Adjusted lot size (0.1x if farming, 1.0x if phase 1)
+        """
+        multiplier = self.get_farming_lot_multiplier(slot_id)
+        adjusted_lot = base_lot_size * multiplier
+        
+        if multiplier < 1.0:
+            self.logger.info(f"[FARMING] Lot adjusted: {base_lot_size:.2f}L × {multiplier} = {adjusted_lot:.2f}L")
+        
+        return adjusted_lot

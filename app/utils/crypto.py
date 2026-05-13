@@ -61,6 +61,25 @@ class CredentialVault:
         vault_data = self.decrypt_credentials() or {"accounts": {}}
         vault_data["accounts"][account_id] = credentials
         self.encrypt_credentials(vault_data)
+
+    def remove_account(self, account_id: str) -> bool:
+        """Remove a specific account from the vault."""
+        try:
+            vault_data = self.decrypt_credentials() or {"accounts": {}}
+            accounts = vault_data.get("accounts", {})
+            if account_id not in accounts:
+                return False
+
+            del accounts[account_id]
+            vault_data["accounts"] = accounts
+            self.encrypt_credentials(vault_data)
+            return True
+        except Exception:
+            return False
+
+    def clear_accounts(self) -> None:
+        """Remove every saved account from the vault."""
+        self.encrypt_credentials({"accounts": {}})
     
     def get_account(self, account_id: str) -> Optional[Dict[str, str]]:
         """Retrieve specific account credentials"""

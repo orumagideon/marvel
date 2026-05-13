@@ -14,41 +14,50 @@ class MarketFeedWidget(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, fg_color="#1a1a1a", **kwargs)
         
+        self.grid_columnconfigure(0, weight=1)
+        
         # Symbol ticker
         self.symbol_label = ctk.CTkLabel(
             self,
-            text="US100/USD",
-            font=("Arial", 20, "bold"),
+            text="US100",
+            font=("Arial", 24, "bold"),
             text_color="#00ff88"
         )
-        self.symbol_label.pack(pady=10)
+        self.symbol_label.grid(row=0, column=0, pady=(10, 5), sticky="ew")
         
-        # Price display
+        # Price display with grid for proper alignment
         price_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        price_frame.pack(fill="x", padx=20, pady=5)
+        price_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=8)
+        price_frame.grid_columnconfigure(1, weight=1)
+        price_frame.grid_columnconfigure(3, weight=1)
         
-        ctk.CTkLabel(price_frame, text="Bid:", font=("Arial", 11), text_color="#888").pack(side="left")
-        self.bid_label = ctk.CTkLabel(price_frame, text="---", font=("Arial", 11, "bold"), text_color="#00ff88")
-        self.bid_label.pack(side="left", padx=5)
+        ctk.CTkLabel(price_frame, text="Bid:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.bid_label = ctk.CTkLabel(price_frame, text="---.----", font=("Arial", 12, "bold"), text_color="#00ff88")
+        self.bid_label.grid(row=0, column=1, sticky="w")
         
-        ctk.CTkLabel(price_frame, text="Ask:", font=("Arial", 11), text_color="#888").pack(side="left", padx=(20, 0))
-        self.ask_label = ctk.CTkLabel(price_frame, text="---", font=("Arial", 11, "bold"), text_color="#00ff88")
-        self.ask_label.pack(side="left", padx=5)
+        ctk.CTkLabel(price_frame, text="Ask:", font=("Arial", 11), text_color="#888").grid(row=0, column=2, sticky="w", padx=(25, 8))
+        self.ask_label = ctk.CTkLabel(price_frame, text="---.----", font=("Arial", 12, "bold"), text_color="#00ff88")
+        self.ask_label.grid(row=0, column=3, sticky="w")
         
         # Spread
         spread_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        spread_frame.pack(fill="x", padx=20, pady=5)
+        spread_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=5)
+        spread_frame.grid_columnconfigure(1, weight=1)
         
-        ctk.CTkLabel(spread_frame, text="Spread:", font=("Arial", 10), text_color="#888").pack(side="left")
-        self.spread_label = ctk.CTkLabel(spread_frame, text="--- pips", font=("Arial", 10), text_color="#ffaa00")
-        self.spread_label.pack(side="left", padx=5)
+        ctk.CTkLabel(spread_frame, text="Spread:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.spread_label = ctk.CTkLabel(spread_frame, text="---.-- pips", font=("Arial", 11, "bold"), text_color="#ffaa00")
+        self.spread_label.grid(row=0, column=1, sticky="w")
     
     def update_data(self, data: Dict[str, Any]) -> None:
         """Update market data display"""
         if data:
-            self.bid_label.configure(text=f"{data.get('bid', 0):.4f}")
-            self.ask_label.configure(text=f"{data.get('ask', 0):.4f}")
-            self.spread_label.configure(text=f"{data.get('spread_pips', 0):.2f} pips")
+            bid = data.get('bid', 0)
+            ask = data.get('ask', 0)
+            spread = data.get('spread_pips', 0)
+            
+            self.bid_label.configure(text=f"{bid:.4f}" if bid else "---.----")
+            self.ask_label.configure(text=f"{ask:.4f}" if ask else "---.----")
+            self.spread_label.configure(text=f"{spread:.2f} pips" if spread else "---.-- pips")
 
     def set_symbol(self, symbol: str) -> None:
         """Update the displayed symbol label."""
@@ -62,30 +71,35 @@ class AccountHealthWidget(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, fg_color="#1a1a1a", **kwargs)
         
+        self.grid_columnconfigure(1, weight=1)
+        
         # Drawdown gauge
         gauge_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        gauge_frame.pack(fill="x", padx=20, pady=10)
+        gauge_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=10)
+        gauge_frame.grid_columnconfigure(1, weight=1)
         
-        ctk.CTkLabel(gauge_frame, text="Daily Drawdown:", font=("Arial", 11), text_color="#888").pack(side="left")
+        ctk.CTkLabel(gauge_frame, text="Daily Drawdown:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w", padx=(0, 10))
         
         self.gauge = ctk.CTkProgressBar(gauge_frame, fg_color="#2a2a2a", progress_color="#ff0000")
-        self.gauge.pack(side="left", fill="x", expand=True, padx=10)
+        self.gauge.grid(row=0, column=1, sticky="ew", padx=10)
         self.gauge.set(0)
         
-        self.drawdown_label = ctk.CTkLabel(gauge_frame, text="0%", font=("Arial", 11), text_color="#00ff88")
-        self.drawdown_label.pack(side="left")
+        self.drawdown_label = ctk.CTkLabel(gauge_frame, text="0%", font=("Arial", 11, "bold"), text_color="#00ff88", width=40)
+        self.drawdown_label.grid(row=0, column=2, sticky="w", padx=(10, 0))
         
         # Equity display
         equity_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
-        equity_frame.pack(fill="x", padx=20, pady=5)
+        equity_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=15, pady=5)
+        equity_frame.grid_columnconfigure(1, weight=0, minsize=100)
+        equity_frame.grid_columnconfigure(3, weight=0, minsize=150)
         
-        ctk.CTkLabel(equity_frame, text="Equity:", font=("Arial", 10), text_color="#888").pack(side="left")
-        self.equity_label = ctk.CTkLabel(equity_frame, text="$---", font=("Arial", 10, "bold"), text_color="#00ff88")
-        self.equity_label.pack(side="left", padx=20)
+        ctk.CTkLabel(equity_frame, text="Equity:", font=("Arial", 10), text_color="#888").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.equity_label = ctk.CTkLabel(equity_frame, text="$0.00", font=("Arial", 10, "bold"), text_color="#00ff88", width=100)
+        self.equity_label.grid(row=0, column=1, sticky="w")
         
-        ctk.CTkLabel(equity_frame, text="Margin Level:", font=("Arial", 10), text_color="#888").pack(side="left")
-        self.margin_label = ctk.CTkLabel(equity_frame, text="---", font=("Arial", 10, "bold"), text_color="#00ff88")
-        self.margin_label.pack(side="left", padx=20)
+        ctk.CTkLabel(equity_frame, text="Margin Level:", font=("Arial", 10), text_color="#888").grid(row=0, column=2, sticky="w", padx=(20, 8))
+        self.margin_label = ctk.CTkLabel(equity_frame, text="0.0%", font=("Arial", 10, "bold"), text_color="#00ff88", width=80)
+        self.margin_label.grid(row=0, column=3, sticky="w")
     
     def update_health(self, health_data: Dict[str, Any]) -> None:
         """Update health display"""
@@ -404,6 +418,110 @@ class TradingControlsWidget(ctk.CTkFrame):
                 self.inject_status_label.configure(text=text)
         except Exception:
             pass
+
+
+class SymbolSelectorWidget(ctk.CTkFrame):
+    """Multi-Asset Dynamic Symbol Selector with pip/margin display"""
+    
+    PRIMARY_SYMBOLS = ["USTECH", "NAS100", "XAUUSD", "US30", "GER40"]
+    
+    def __init__(self, parent, on_symbol_change: Callable[[str], None] = None, asset_registry=None, **kwargs):
+        super().__init__(parent, fg_color="#1a1a1a", **kwargs)
+        
+        self.on_symbol_change = on_symbol_change
+        self.asset_registry = asset_registry
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Title
+        title = ctk.CTkLabel(
+            self,
+            text="SELECT ASSET",
+            font=("Arial", 12, "bold"),
+            text_color="#00ffcc"
+        )
+        title.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 8))
+        
+        # Symbol dropdown
+        dropdown_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
+        dropdown_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        dropdown_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(dropdown_frame, text="Symbol:", font=("Arial", 11), text_color="#888").grid(row=0, column=0, sticky="w")
+        
+        self.symbol_var = ctk.StringVar(value="USTECH")
+        self.symbol_menu = ctk.CTkOptionMenu(
+            dropdown_frame,
+            values=self.PRIMARY_SYMBOLS,
+            variable=self.symbol_var,
+            command=self._on_symbol_selected,
+            fg_color="#0f0f0f",
+            button_color="#005f87",
+            button_hover_color="#007fb4",
+        )
+        self.symbol_menu.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        
+        # Asset info display
+        info_frame = ctk.CTkFrame(self, fg_color="#0a0a0a", corner_radius=5)
+        info_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=10)
+        info_frame.grid_columnconfigure(0, weight=1)
+        info_frame.grid_columnconfigure(1, weight=1)
+        
+        # Pip value
+        ctk.CTkLabel(info_frame, text="Pip Value:", font=("Arial", 10), text_color="#888").grid(row=0, column=0, sticky="w", padx=10, pady=6)
+        self.pip_value_label = ctk.CTkLabel(info_frame, text="$1.00", font=("Arial", 10, "bold"), text_color="#00ff88")
+        self.pip_value_label.grid(row=0, column=1, sticky="w", padx=10, pady=6)
+        
+        # Margin requirement
+        ctk.CTkLabel(info_frame, text="Margin/Lot:", font=("Arial", 10), text_color="#888").grid(row=1, column=0, sticky="w", padx=10, pady=6)
+        self.margin_label = ctk.CTkLabel(info_frame, text="$1,300.00", font=("Arial", 10, "bold"), text_color="#ffaa00")
+        self.margin_label.grid(row=1, column=1, sticky="w", padx=10, pady=6)
+        
+        # Category
+        ctk.CTkLabel(info_frame, text="Category:", font=("Arial", 10), text_color="#888").grid(row=2, column=0, sticky="w", padx=10, pady=6)
+        self.category_label = ctk.CTkLabel(info_frame, text="Indices", font=("Arial", 10, "bold"), text_color="#00ff88")
+        self.category_label.grid(row=2, column=1, sticky="w", padx=10, pady=6)
+        
+        # Hedge efficiency
+        ctk.CTkLabel(info_frame, text="Hedge Efficiency:", font=("Arial", 10), text_color="#888").grid(row=3, column=0, sticky="w", padx=10, pady=6)
+        self.efficiency_label = ctk.CTkLabel(info_frame, text="72.0%", font=("Arial", 10, "bold"), text_color="#00ff88")
+        self.efficiency_label.grid(row=3, column=1, sticky="w", padx=10, pady=6)
+        
+        # Volatility score
+        ctk.CTkLabel(info_frame, text="Volatility:", font=("Arial", 10), text_color="#888").grid(row=4, column=0, sticky="w", padx=10, pady=6)
+        self.volatility_label = ctk.CTkLabel(info_frame, text="1.50", font=("Arial", 10, "bold"), text_color="#ffaa00")
+        self.volatility_label.grid(row=4, column=1, sticky="w", padx=10, pady=(6, 10))
+        
+        # Initialize display
+        self._update_asset_display()
+    
+    def _on_symbol_selected(self, symbol: str) -> None:
+        """Handle symbol selection change"""
+        self._update_asset_display()
+        if self.on_symbol_change:
+            self.on_symbol_change(symbol)
+    
+    def _update_asset_display(self) -> None:
+        """Update asset info display based on selected symbol"""
+        symbol = self.symbol_var.get()
+        
+        if self.asset_registry:
+            profile = self.asset_registry.get_asset_profile(symbol)
+            if profile:
+                self.pip_value_label.configure(text=f"${profile.pip_value_per_lot:.2f}")
+                self.margin_label.configure(text=f"${profile.margin_per_lot:,.2f}")
+                self.category_label.configure(text=profile.category.value.upper())
+                self.efficiency_label.configure(text=f"{profile.hedge_efficiency * 100:.1f}%")
+                self.volatility_label.configure(text=f"{profile.avg_volatility_score:.2f}")
+    
+    def get_selected_symbol(self) -> str:
+        """Get currently selected symbol"""
+        return self.symbol_var.get()
+    
+    def set_selected_symbol(self, symbol: str) -> None:
+        """Set selected symbol programmatically"""
+        if symbol in self.PRIMARY_SYMBOLS:
+            self.symbol_var.set(symbol)
+            self._update_asset_display()
 
 
 class ChallengeConfigWidget(ctk.CTkFrame):

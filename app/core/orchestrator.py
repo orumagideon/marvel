@@ -1,6 +1,7 @@
 """
-Marvel Core Orchestrator
-Central system coordinator that manages all trading components
+Marvel Core Orchestrator - Enhanced Edition
+Central system coordinator managing all trading components with multi-asset support
+Features: Dynamic asset registry, session management, enhanced execution, latency monitoring
 """
 
 import asyncio
@@ -16,22 +17,43 @@ from app.recovery_engine.prop_risk_engine import (
     PropFirmChallengeConfig,
 )
 from app.execution_engine.sync_executor import SynchronizedExecutionEngine, TradeType
+from app.execution_engine.enhanced_sync_executor import EnhancedSynchronizedExecutionEngine, ParallelExecutionResult
 from app.risk_management.safety_monitor import RiskManagementSystem
 from app.utils.config import get_config
-from typing import Any
+from app.market_data.asset_registry import AssetRegistry, AssetCategory
+from app.session_manager.session_manager import SessionManager, ChallengePhase
+from app.monitoring.latency_monitor import LatencyMonitor, ConnectionQuality
 
 
 class MavelCoreSystem:
     """
     Main trading system orchestrator
     Coordinates MT5 connections, account management, recovery, execution, and risk management
+    Features:
+    - Multi-asset symbol support (USTECH, NAS100, XAUUSD, US30, GER40)
+    - Dynamic symbol selector with pip/margin auto-mapping
+    - cTrader DOM automation with parallel execution
+    - Session-based account auto-detection
+    - Kenya-optimized latency monitoring
     """
     
     def __init__(self):
         self.logger = get_logger()
         self.config = get_config()
         
-        # Initialize all subsystems
+        # === NEW: Asset Registry ===
+        self.asset_registry = AssetRegistry()
+        
+        # === NEW: Session Manager ===
+        self.session_manager: Optional[SessionManager] = None
+        
+        # === NEW: Enhanced Execution Engine ===
+        self.enhanced_execution_engine = EnhancedSynchronizedExecutionEngine()
+        
+        # === NEW: Latency Monitor (Kenya-optimized) ===
+        self.latency_monitor = LatencyMonitor()
+        
+        # === EXISTING: Initialize all subsystems ===
         self.mt5_manager = MT5ConnectionManager()
         self.market_data = MarketDataProvider()
         self.account_manager = AccountManager()
@@ -39,11 +61,12 @@ class MavelCoreSystem:
         self.prop_risk_engine = PropFirmRiskEngine()
         self.execution_engine = SynchronizedExecutionEngine()
         self.risk_manager = RiskManagementSystem()
-        # Optional Match-Trader bridge (lazy started by UI or system operator)
+        
+        # Optional cTrader bridge (lazy started by UI or system operator)
         self.match_trader_bridge: Optional[Any] = None
         try:
-            from app.browser_bridge.match_trader_bridge import MatchTraderBridge
-            self.match_trader_bridge = MatchTraderBridge()
+            from app.browser_bridge.match_trader_bridge import CTraderBridge
+            self.match_trader_bridge = CTraderBridge()
         except Exception:
             # Bridge optional; Playwright may not be installed in some environments
             self.match_trader_bridge = None
@@ -54,6 +77,7 @@ class MavelCoreSystem:
         self.auto_recovery_enabled = True
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.current_recovery_mode = "balanced"
+        self.current_symbol: Optional[str] = None
 
         # Restore saved prop-firm templates from config
         try:
@@ -63,7 +87,131 @@ class MavelCoreSystem:
         except Exception:
             pass
         
-        self.logger.info("Marvel Core System initialized")
+        # Initialize session manager with bridges
+        self._init_session_manager()
+        
+        self.logger.info("Marvel Core System initialized with multi-asset support")
+    
+    def _init_session_manager(self) -> None:
+        """Initialize session manager with available bridges"""
+        self.session_manager = SessionManager(
+            browser_bridge=self.match_trader_bridge,
+            mt5_manager=self.mt5_manager
+        )
+    
+    # ===== ASSET REGISTRY & SYMBOL SELECTION =====
+    
+    def get_asset_registry(self) -> AssetRegistry:
+        """Get the asset registry for symbol management"""
+        return self.asset_registry
+    
+    def get_primary_symbols(self) -> List[str]:
+        """Get list of primary trading symbols (Kenya-optimized)"""
+        return self.asset_registry.get_primary_symbols()
+    
+    def select_symbol(self, symbol: str) -> bool:
+        """
+        Select active trading symbol
+        Auto-maps pip value and margin requirement
+        """
+        success = self.asset_registry.select_symbol(symbol)
+        if success:
+            self.current_symbol = symbol
+            if self.session_manager:
+                self.session_manager.set_selected_symbol(symbol)
+            self.logger.info(f"Symbol selected: {symbol}")
+        return success
+    
+    def get_selected_symbol(self) -> Optional[str]:
+        """Get currently selected symbol"""
+        return self.current_symbol or self.asset_registry.get_selected_symbol()
+    
+    def get_symbol_profile(self, symbol: str) -> Dict[str, Any]:
+        """Get comprehensive profile for symbol (pip value, margin, etc.)"""
+        return self.asset_registry.get_asset_info_display(symbol)
+    
+    # ===== SESSION MANAGEMENT =====
+    
+    async def initialize_ctrader_session(self, account_id: int) -> bool:
+        """
+        Initialize cTrader session with auto-detection
+        - Reads account balance
+        - Detects challenge phase
+        - Sets up session context
+        """
+        if not self.session_manager:
+            return False
+        
+        session = self.session_manager.create_session(account_id, platform="ctrader")
+        
+        # Auto-detect balance
+        balance_detected = await self.session_manager.auto_detect_account_balance(session)
+        if not balance_detected:
+            self.logger.warning(f"Failed to detect balance for account {account_id}")
+            return False
+        
+        # Auto-detect challenge phase
+        phase = await self.session_manager.detect_challenge_phase(session)
+        self.logger.info(f"Session initialized: {account_id} | Phase: {phase.value} | Balance: ${session.account_balance:.2f}")
+        
+        return True
+    
+    def get_session_summary(self) -> Dict[str, Any]:
+        """Get current session context summary"""
+        if not self.session_manager:
+            return {"status": "session_manager_unavailable"}
+        
+        return self.session_manager.get_session_summary()
+    
+    def validate_symbol_match(self, expected_symbol: str) -> Tuple[bool, str]:
+        """
+        Validate that selected symbol matches chart symbol
+        Returns (is_valid, message)
+        """
+        if not self.session_manager or not self.match_trader_bridge:
+            return (True, "Validation skipped (no bridge)")
+        
+        selected = self.session_manager.get_selected_symbol()
+        if selected and selected != expected_symbol:
+            return (False, f"Symbol mismatch: {selected} != {expected_symbol}")
+        
+        return (True, "Symbol match validated")
+    
+    # ===== LATENCY MONITORING (Kenya-optimized) =====
+    
+    async def start_latency_monitoring(self) -> None:
+        """Start background latency monitoring"""
+        await self.latency_monitor.start_monitoring()
+        self.logger.info("Latency monitoring started")
+    
+    async def stop_latency_monitoring(self) -> None:
+        """Stop latency monitoring"""
+        await self.latency_monitor.stop_monitoring()
+        self.logger.info("Latency monitoring stopped")
+    
+    def get_latency_stats(self) -> Dict[str, Any]:
+        """Get current latency statistics"""
+        stats = self.latency_monitor.get_current_stats()
+        return {
+            server: {
+                "avg_latency_ms": stat.avg_latency_ms,
+                "min_latency_ms": stat.min_latency_ms,
+                "max_latency_ms": stat.max_latency_ms,
+                "quality": stat.quality.value,
+                "vps_recommended": stat.vps_recommended,
+            }
+            for server, stat in stats.items()
+        }
+    
+    def should_use_vps_mode(self) -> bool:
+        """Check if VPS mode should be recommended (Kenya-optimized)"""
+        return self.latency_monitor.should_use_vps_mode()
+    
+    def get_latency_recommendations(self) -> Dict[str, str]:
+        """Get actionable recommendations based on latency"""
+        return self.latency_monitor.get_recommendations()
+    
+    # ===== EXISTING MT5 METHODS =====
     
     def initialize_maven_instance(self, maven_terminal_path: str) -> bool:
         """Initialize Maven fleet MT5 instance"""
@@ -111,51 +259,116 @@ class MavelCoreSystem:
         """Get account health and risk status"""
         return self.risk_manager.get_status(account)
     
-    async def execute_buy_order(self, symbol: str, lot_size: float,
-                               use_hedge: bool = True, use_maven: bool = True,
-                               tp_pips: float = None, sl_pips: float = None,
-                               selected_slot_id: Optional[int] = None,
-                               selected_phase: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
+    async def execute_buy_order_enhanced(self, 
+                                        symbol: str, 
+                                        lot_size: float,
+                                        use_hedge: bool = True, 
+                                        use_maven: bool = True,
+                                        tp_pips: float = None, 
+                                        sl_pips: float = None) -> ParallelExecutionResult:
         """
-        Execute synchronized BUY across active Maven accounts and hedge
+        Execute synchronized BUY with symbol validation and parallel dispatch
         
-        Args:
-            symbol: Trading symbol
-            lot_size: Lot size per account
-            use_hedge: Whether to include hedge execution
-        
-        Returns:
-            Tuple of (success, execution_results)
+        Features:
+        - Symbol matching validation (prevents mismatched trades)
+        - Parallel execution (Hedge + Maven + cTrader < 10ms spread)
+        - Dynamic asset support (pip value, margin auto-mapping)
+        - Session-aware execution
         """
-        return await self._execute_order(
-            symbol,
-            lot_size,
-            TradeType.BUY,
-            use_hedge,
-            use_maven,
+        # Validate symbol selection
+        if self.session_manager:
+            selected = self.session_manager.get_selected_symbol()
+            if selected and selected != symbol:
+                result = ParallelExecutionResult(success=False)
+                result.symbol_mismatch = True
+                result.error_message = f"Symbol mismatch: selected={selected}, requested={symbol}"
+                return result
+        
+        # Get active accounts
+        active_accounts = self.account_manager.get_active_accounts() if use_maven else []
+        
+        # Get hedge info
+        hedge_info = None
+        if use_hedge and self.hedge_enabled:
+            if self.mt5_manager.is_connected(MT5InstanceType.HEDGE_ACCOUNT):
+                hedge_info = {
+                    "account_id": self.mt5_manager.instances[MT5InstanceType.HEDGE_ACCOUNT].get("account"),
+                    "is_active": True,
+                }
+        
+        # Execute with enhanced engine
+        result = await self.enhanced_execution_engine.execute_synchronized_trade(
+            symbol=symbol,
+            lot_size=lot_size,
+            trade_type=TradeType.BUY,
+            maven_accounts=[
+                {
+                    "account_id": acc.account_number,
+                    "slot_id": acc.slot_id,
+                    "phase": acc.phase.value
+                }
+                for acc in active_accounts
+            ],
+            hedge_instance_info=hedge_info,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
-            selected_slot_id=selected_slot_id,
-            selected_phase=selected_phase,
+            match_trader_bridge=self.match_trader_bridge,
+            session_manager=self.session_manager,
         )
+        
+        return result
     
-    async def execute_sell_order(self, symbol: str, lot_size: float,
-                                use_hedge: bool = True, use_maven: bool = True,
-                                tp_pips: float = None, sl_pips: float = None,
-                                selected_slot_id: Optional[int] = None,
-                                selected_phase: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
-        """Execute synchronized SELL across active Maven accounts and hedge"""
-        return await self._execute_order(
-            symbol,
-            lot_size,
-            TradeType.SELL,
-            use_hedge,
-            use_maven,
+    async def execute_sell_order_enhanced(self,
+                                         symbol: str,
+                                         lot_size: float,
+                                         use_hedge: bool = True,
+                                         use_maven: bool = True,
+                                         tp_pips: float = None,
+                                         sl_pips: float = None) -> ParallelExecutionResult:
+        """Execute synchronized SELL with symbol validation and parallel dispatch"""
+        # Validate symbol selection
+        if self.session_manager:
+            selected = self.session_manager.get_selected_symbol()
+            if selected and selected != symbol:
+                result = ParallelExecutionResult(success=False)
+                result.symbol_mismatch = True
+                result.error_message = f"Symbol mismatch: selected={selected}, requested={symbol}"
+                return result
+        
+        # Get active accounts
+        active_accounts = self.account_manager.get_active_accounts() if use_maven else []
+        
+        # Get hedge info
+        hedge_info = None
+        if use_hedge and self.hedge_enabled:
+            if self.mt5_manager.is_connected(MT5InstanceType.HEDGE_ACCOUNT):
+                hedge_info = {
+                    "account_id": self.mt5_manager.instances[MT5InstanceType.HEDGE_ACCOUNT].get("account"),
+                    "is_active": True,
+                }
+        
+        # Execute with enhanced engine
+        result = await self.enhanced_execution_engine.execute_synchronized_trade(
+            symbol=symbol,
+            lot_size=lot_size,
+            trade_type=TradeType.SELL,
+            maven_accounts=[
+                {
+                    "account_id": acc.account_number,
+                    "slot_id": acc.slot_id,
+                    "phase": acc.phase.value
+                }
+                for acc in active_accounts
+            ],
+            hedge_instance_info=hedge_info,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
-            selected_slot_id=selected_slot_id,
-            selected_phase=selected_phase,
+            match_trader_bridge=self.match_trader_bridge,
+            session_manager=self.session_manager,
         )
+        
+        return result
+    
     
     async def _execute_order(self, symbol: str, lot_size: float, 
                             trade_type: TradeType, use_hedge: bool, use_maven: bool,

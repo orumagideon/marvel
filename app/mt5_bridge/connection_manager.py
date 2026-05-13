@@ -44,6 +44,8 @@ class MT5ConnectionManager:
     def __init__(self):
         self.logger = get_logger()
         self.is_mt5_initialized = False  # Track global MT5 initialization state
+        self.active_terminal_path: Optional[str] = None
+        self.active_instance_type: Optional[MT5InstanceType] = None
         self.instances: Dict[MT5InstanceType, Dict[str, Any]] = {
             MT5InstanceType.MAVEN_FLEET: {
                 "state": ConnectionState.DISCONNECTED,
@@ -120,6 +122,21 @@ class MT5ConnectionManager:
 
             self.instances[instance_type]["state"] = ConnectionState.CONNECTING
             self.instances[instance_type]["terminal_path"] = resolved_terminal_path
+
+            if self.is_mt5_initialized and self.active_terminal_path and self.active_terminal_path != resolved_terminal_path:
+                self.logger.info(
+                    f"Switching MT5 terminal from {self.active_terminal_path} to {resolved_terminal_path}"
+                )
+                try:
+                    mt5.shutdown()
+                except Exception:
+                    pass
+                self.is_mt5_initialized = False
+                self.active_terminal_path = None
+                self.active_instance_type = None
+                for other_instance in MT5InstanceType:
+                    self.instances[other_instance]["state"] = ConnectionState.DISCONNECTED
+                    self.instances[other_instance]["account"] = None
             
             # Check if MT5 is already initialized globally
             if self.is_mt5_initialized:
@@ -127,6 +144,7 @@ class MT5ConnectionManager:
                 self.instances[instance_type]["state"] = ConnectionState.CONNECTED
                 self.instances[instance_type]["connection_time"] = datetime.now()
                 self.retry_counts[instance_type] = 0
+                self.active_instance_type = instance_type
                 self.logger.info(f"[{instance_type.value}] Using existing MT5 initialization")
                 return True
             
@@ -145,6 +163,8 @@ class MT5ConnectionManager:
             
             # Mark MT5 as initialized globally
             self.is_mt5_initialized = True
+            self.active_terminal_path = resolved_terminal_path
+            self.active_instance_type = instance_type
             self.instances[instance_type]["state"] = ConnectionState.CONNECTED
             self.instances[instance_type]["connection_time"] = datetime.now()
             self.retry_counts[instance_type] = 0
@@ -358,9 +378,13 @@ class MT5ConnectionManager:
         but we only mark this specific instance as disconnected.
         """
         try:
-            # Note: MT5.shutdown() affects the entire MT5 module, not just one instance
-            # In production with separate terminal instances, this would properly isolate
-            self.instances[instance_type]["state"] = ConnectionState.DISCONNECTED
+            mt5.shutdown()
+            self.is_mt5_initialized = False
+            self.active_terminal_path = None
+            self.active_instance_type = None
+            for other_instance in MT5InstanceType:
+                self.instances[other_instance]["state"] = ConnectionState.DISCONNECTED
+                self.instances[other_instance]["account"] = None
             self.logger.log_connection(instance_type.value, "shutdown")
         except Exception as e:
             self.logger.log_error(e, f"Shutdown error ({instance_type.value})")
@@ -370,18 +394,132 @@ class MT5ConnectionManager:
         try:
             mt5.shutdown()
             self.is_mt5_initialized = False  # Reset global initialization state
+            self.active_terminal_path = None
+            self.active_instance_type = None
             for instance_type in MT5InstanceType:
                 self.instances[instance_type]["state"] = ConnectionState.DISCONNECTED
+                self.instances[instance_type]["account"] = None
             self.logger.info("All MT5 connections shutdown")
         except Exception as e:
             self.logger.log_error(e, "Shutdown all error")
     
-    def shutdown_all(self) -> None:
-        """Shutdown all connections"""
+    async def heartbeat_monitor(self, interval_seconds: float = 1.0, 
+                               latency_threshold_ms: float = 250.0) -> Dict[str, Any]:
+        """
+        Kenya-specific heartbeat monitor for connectivity.
+        
+        Pings both Exness and Maven servers every N seconds.
+        If latency exceeds threshold (default 250ms), trading is disabled.
+        
+        This is critical for Kenya ISP environments where intermittent lag
+        can cause desynchronized entries between Maven and Exness.
+        
+        Args:
+            interval_seconds: Ping interval (default 1 second)
+            latency_threshold_ms: Latency threshold for disabling trades (default 250ms)
+        
+        Returns:
+            Dictionary with heartbeat status
+        """
         try:
-            mt5.shutdown()
-            for instance_type in MT5InstanceType:
-                self.instances[instance_type]["state"] = ConnectionState.DISCONNECTED
-            self.logger.info("All MT5 connections shutdown")
+            import time as time_module
+            
+            heartbeat_data = {
+                "timestamp": datetime.now().isoformat(),
+                "interval_seconds": interval_seconds,
+                "latency_threshold_ms": latency_threshold_ms,
+                "maven_latency_ms": 0.0,
+                "exness_latency_ms": 0.0,
+                "trading_enabled": True,
+                "status": "healthy"
+            }
+            
+            # Ping Maven instance
+            if self.is_connected(MT5InstanceType.MAVEN_FLEET):
+                maven_start = time_module.time()
+                try:
+                    # Simple price fetch as latency test
+                    mt5.symbol_info_tick("USTECH")
+                    maven_latency = (time_module.time() - maven_start) * 1000
+                    self.instances[MT5InstanceType.MAVEN_FLEET]["latency_ms"] = maven_latency
+                    heartbeat_data["maven_latency_ms"] = round(maven_latency, 2)
+                except Exception:
+                    heartbeat_data["maven_latency_ms"] = -1.0
+            
+            # Ping Exness instance
+            if self.is_connected(MT5InstanceType.HEDGE_ACCOUNT):
+                exness_start = time_module.time()
+                try:
+                    # Simple price fetch as latency test
+                    mt5.symbol_info_tick("USTECH")
+                    exness_latency = (time_module.time() - exness_start) * 1000
+                    self.instances[MT5InstanceType.HEDGE_ACCOUNT]["latency_ms"] = exness_latency
+                    heartbeat_data["exness_latency_ms"] = round(exness_latency, 2)
+                except Exception:
+                    heartbeat_data["exness_latency_ms"] = -1.0
+            
+            # Determine trading status
+            max_latency = max(
+                heartbeat_data["maven_latency_ms"],
+                heartbeat_data["exness_latency_ms"]
+            )
+            
+            if max_latency < 0:
+                # One or both connections not responding
+                heartbeat_data["trading_enabled"] = False
+                heartbeat_data["status"] = "critical"
+                self.logger.warning("[HEARTBEAT] ⚠️ CRITICAL: Connection not responding")
+            elif max_latency > latency_threshold_ms:
+                # High latency detected
+                heartbeat_data["trading_enabled"] = False
+                heartbeat_data["status"] = "high_latency"
+                self.logger.warning(
+                    f"[HEARTBEAT] ⚠️ HIGH LATENCY DETECTED: {max_latency:.2f}ms > {latency_threshold_ms}ms "
+                    f"(Maven: {heartbeat_data['maven_latency_ms']:.2f}ms, "
+                    f"Exness: {heartbeat_data['exness_latency_ms']:.2f}ms) - TRADING DISABLED"
+                )
+            else:
+                # Normal operation
+                heartbeat_data["trading_enabled"] = True
+                heartbeat_data["status"] = "healthy"
+                self.logger.debug(
+                    f"[HEARTBEAT] ✓ Latency OK: Maven {heartbeat_data['maven_latency_ms']:.2f}ms, "
+                    f"Exness {heartbeat_data['exness_latency_ms']:.2f}ms"
+                )
+            
+            return heartbeat_data
+            
         except Exception as e:
-            self.logger.log_error(e, "Shutdown all error")
+            self.logger.log_error(e, "Heartbeat monitor error")
+            return {
+                "error": str(e),
+                "trading_enabled": False,
+                "status": "error"
+            }
+    
+    def get_latency_status(self) -> Dict[str, Any]:
+        """
+        Get current latency status for both instances
+        
+        Returns:
+            Dictionary with latency metrics and trading enablement status
+        """
+        maven_status = self.instances[MT5InstanceType.MAVEN_FLEET]
+        exness_status = self.instances[MT5InstanceType.HEDGE_ACCOUNT]
+        
+        max_latency = max(maven_status["latency_ms"], exness_status["latency_ms"])
+        trading_allowed = max_latency <= 250.0  # Default threshold
+        
+        return {
+            "maven": {
+                "latency_ms": maven_status["latency_ms"],
+                "connected": self.is_connected(MT5InstanceType.MAVEN_FLEET)
+            },
+            "exness": {
+                "latency_ms": exness_status["latency_ms"],
+                "connected": self.is_connected(MT5InstanceType.HEDGE_ACCOUNT)
+            },
+            "max_latency_ms": max_latency,
+            "trading_allowed": trading_allowed,
+            "timestamp": datetime.now().isoformat()
+        }

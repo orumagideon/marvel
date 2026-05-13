@@ -137,17 +137,29 @@ class HedgeRecoveryEngine:
                                 target_profit: float,
                                 max_drawdown: float = DEFAULT_DAILY_DRAWDOWN,
                                 pip_value: float = 10.0,  # USD per pip for standard lot
-                                symbol: str = "EURUSD") -> float:
+                                symbol: str = "EURUSD",
+                                apply_aggressive_multiplier: bool = True) -> float:
         """
-        Calculate hedge lot size using recovery formula.
+        Calculate hedge lot size using recovery formula with optional aggressive multiplier.
         
+        Core Formula:
         HedgeLot = TargetProfit / (DrawdownDistance × PipValue)
+        
+        When apply_aggressive_multiplier=True (Exness Hedge Side):
+        HedgeLot = TargetProfit / (DrawdownDistance × PipValue) × 1.3
+        
+        The 1.3x multiplier is applied to the Exness hedge side to:
+        1. Ensure Maven failure results in net gain on Exness side
+        2. Cover: Evaluation Fee + Account Drawdown + $60 Surplus
+        3. Compensate for potential Maven-side losses
         
         Args:
             target_profit: Total recovery target in USD
             max_drawdown: Maximum daily drawdown allowance in USD
             pip_value: Value per pip in USD (default 10 for standard lot)
             symbol: Trading symbol for pip calculation
+            apply_aggressive_multiplier: True to apply 1.3x multiplier (Exness hedge), 
+                                        False for Maven side lot calculation
         
         Returns:
             Calculated lot size (0.01 lot precision)
@@ -156,19 +168,33 @@ class HedgeRecoveryEngine:
             self.logger.error("Max drawdown must be positive")
             return 0.0
         
-        # Calculate lot size
+        # Calculate base lot size
         drawdown_distance = max_drawdown
-        lot_size = target_profit / (drawdown_distance * pip_value)
+        base_lot_size = target_profit / (drawdown_distance * pip_value)
+        
+        # Apply aggressive multiplier if this is the Exness hedge side
+        if apply_aggressive_multiplier:
+            # 1.3x multiplier for Exness hedge to ensure recovery in case of Maven failure
+            AGGRESSIVE_MULTIPLIER = 1.3
+            final_lot_size = base_lot_size * AGGRESSIVE_MULTIPLIER
+            multiplier_applied = True
+        else:
+            final_lot_size = base_lot_size
+            multiplier_applied = False
         
         # Normalize to precision
-        lot_size = round(lot_size, 2)
+        final_lot_size = round(final_lot_size, 2)
         
-        self.logger.debug(
+        log_msg = (
             f"Hedge lot calculated: Target=${target_profit:.2f} / "
-            f"(${drawdown_distance:.2f} × ${pip_value:.2f}) = {lot_size:.2f}L"
+            f"(${drawdown_distance:.2f} × ${pip_value:.2f}) = {base_lot_size:.2f}L"
         )
+        if multiplier_applied:
+            log_msg += f" × 1.3 (AGGRESSIVE) = {final_lot_size:.2f}L"
         
-        return lot_size
+        self.logger.debug(log_msg)
+        
+        return final_lot_size
     
     def record_hedge_loss(self,
                          cycle_id: str,
@@ -539,3 +565,85 @@ class HedgeRecoveryEngine:
         except Exception as e:
             self.logger.log_error(e, "Failed to get latest hedge trade context")
             return None
+    
+    def calculate_exness_hedge_lot(self,
+                                  maven_accounts_count: int = 5,
+                                  evaluation_fee: float = 50.0,
+                                  desired_surplus: float = 60.0,
+                                  max_drawdown: float = DEFAULT_DAILY_DRAWDOWN,
+                                  pip_value: float = 10.0,
+                                  symbol: str = "USTECH") -> Dict[str, Any]:
+        """
+        Calculate Exness hedge lot size with 1.3x aggressive multiplier.
+        
+        Specifically designed for:
+        - Exness KE account (1 hedge slot)
+        - Trading against Maven Fleet (5 slots)
+        - Asset: USTECH/US100
+        
+        Recovery Goal:
+        If Maven side FAILS → Exness side should achieve net gain to cover:
+        1. Evaluation Fee ($50)
+        2. Account Drawdown (max allowed)
+        3. Surplus Profit ($60)
+        
+        Args:
+            maven_accounts_count: Number of Maven accounts (typically 5)
+            evaluation_fee: Challenge evaluation fee
+            desired_surplus: Surplus profit beyond fee recovery
+            max_drawdown: Maximum daily drawdown allowance
+            pip_value: USD value per pip for USTECH
+            symbol: Trading symbol (default USTECH)
+        
+        Returns:
+            Dictionary with:
+            - base_lot: Calculated without multiplier
+            - hedge_lot: Final lot with 1.3x multiplier
+            - target_profit: Required profit target
+            - multiplier: 1.3 (aggressive)
+            - explanation: How the calculation was derived
+        """
+        # Calculate target profit (fees + surplus)
+        # Maven accounts don't contribute fees to hedge calc in this model
+        # Hedge focuses on making surplus to cover recovery needs
+        target_profit = evaluation_fee + desired_surplus
+        
+        # Calculate base lot without multiplier
+        base_lot = self.calculate_hedge_lot_size(
+            target_profit=target_profit,
+            max_drawdown=max_drawdown,
+            pip_value=pip_value,
+            symbol=symbol,
+            apply_aggressive_multiplier=False
+        )
+        
+        # Calculate lot with 1.3x aggressive multiplier
+        hedge_lot = self.calculate_hedge_lot_size(
+            target_profit=target_profit,
+            max_drawdown=max_drawdown,
+            pip_value=pip_value,
+            symbol=symbol,
+            apply_aggressive_multiplier=True  # 1.3x multiplier
+        )
+        
+        result = {
+            "symbol": symbol,
+            "base_lot": base_lot,
+            "hedge_lot": hedge_lot,
+            "multiplier": 1.3,
+            "target_profit": target_profit,
+            "evaluation_fee": evaluation_fee,
+            "desired_surplus": desired_surplus,
+            "max_drawdown": max_drawdown,
+            "pip_value": pip_value,
+            "maven_accounts_count": maven_accounts_count,
+            "explanation": (
+                f"Target: ${target_profit:.2f} (Fee ${evaluation_fee:.2f} + Surplus ${desired_surplus:.2f}) | "
+                f"Base Lot: {base_lot:.2f}L | "
+                f"With 1.3x Aggressive: {hedge_lot:.2f}L | "
+                f"Goal: If Maven fails, Exness profit covers evaluation and provides surplus"
+            )
+        }
+        
+        self.logger.info(f"[EXNESS HEDGE] {result['explanation']}")
+        return result
