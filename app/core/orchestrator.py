@@ -63,13 +63,13 @@ class MavelCoreSystem:
         self.risk_manager = RiskManagementSystem()
         
         # Optional cTrader bridge (lazy started by UI or system operator)
-        self.match_trader_bridge: Optional[Any] = None
+        self.ctrader_bridge: Optional[Any] = None
         try:
-            from app.browser_bridge.match_trader_bridge import CTraderBridge
-            self.match_trader_bridge = CTraderBridge()
+            from app.browser_bridge.ctrader_bridge import CTraderBridge
+            self.ctrader_bridge = CTraderBridge()
         except Exception:
             # Bridge optional; Playwright may not be installed in some environments
-            self.match_trader_bridge = None
+            self.ctrader_bridge = None
         
         # State
         self.is_running = False
@@ -95,7 +95,7 @@ class MavelCoreSystem:
     def _init_session_manager(self) -> None:
         """Initialize session manager with available bridges"""
         self.session_manager = SessionManager(
-            browser_bridge=self.match_trader_bridge,
+            browser_bridge=self.ctrader_bridge,
             mt5_manager=self.mt5_manager
         )
     
@@ -168,7 +168,7 @@ class MavelCoreSystem:
         Validate that selected symbol matches chart symbol
         Returns (is_valid, message)
         """
-        if not self.session_manager or not self.match_trader_bridge:
+        if not self.session_manager or not self.ctrader_bridge:
             return (True, "Validation skipped (no bridge)")
         
         selected = self.session_manager.get_selected_symbol()
@@ -284,8 +284,7 @@ class MavelCoreSystem:
                 result.error_message = f"Symbol mismatch: selected={selected}, requested={symbol}"
                 return result
         
-        # Get active accounts
-        active_accounts = self.account_manager.get_active_accounts() if use_maven else []
+            active_accounts = self.account_manager.get_active_accounts() if use_maven else []
         
         # Get hedge info
         hedge_info = None
@@ -312,7 +311,7 @@ class MavelCoreSystem:
             hedge_instance_info=hedge_info,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
-            match_trader_bridge=self.match_trader_bridge,
+            match_trader_bridge=self.ctrader_bridge,
             session_manager=self.session_manager,
         )
         
@@ -335,8 +334,7 @@ class MavelCoreSystem:
                 result.error_message = f"Symbol mismatch: selected={selected}, requested={symbol}"
                 return result
         
-        # Get active accounts
-        active_accounts = self.account_manager.get_active_accounts() if use_maven else []
+            active_accounts = self.account_manager.get_active_accounts() if use_maven else []
         
         # Get hedge info
         hedge_info = None
@@ -363,7 +361,7 @@ class MavelCoreSystem:
             hedge_instance_info=hedge_info,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
-            match_trader_bridge=self.match_trader_bridge,
+            match_trader_bridge=self.ctrader_bridge,
             session_manager=self.session_manager,
         )
         
@@ -460,7 +458,7 @@ class MavelCoreSystem:
                 tp_pips=tp_pips,
                 sl_pips=sl_pips,
                 hedge_lot=hedge_lot_override,
-                match_trader_bridge=self.match_trader_bridge
+                match_trader_bridge=self.ctrader_bridge
             )
 
             if isinstance(results, dict):
@@ -599,16 +597,39 @@ class MavelCoreSystem:
         self.config.set("prop_firm.saved_templates", self.prop_risk_engine.saved_templates)
         return True
 
-    def start_match_trader_bridge(self, url: str, headless: bool = True) -> Dict[str, Any]:
-        """Start the Match-Trader browser bridge synchronously.
+    def start_ctrader_bridge(self, url: str, headless: bool = True) -> Dict[str, Any]:
+        """Start the cTrader browser bridge synchronously.
 
         This is a convenience wrapper callable from the UI.
         """
-        if not self.match_trader_bridge:
+        if not self.ctrader_bridge:
             return {"success": False, "error": "bridge_unavailable"}
         try:
             # Use asyncio.run to start the async bridge
-            return asyncio.run(self.match_trader_bridge.start(url=url, headless=headless))
+            return asyncio.run(self.ctrader_bridge.start(url=url, headless=headless))
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def login_maven_via_ctrader_browser(self, account: int, password: str, server: str, url: str = None, headless: bool = True) -> Dict[str, Any]:
+        """Start the cTrader bridge and inject Maven login credentials via browser automation."""
+        if not self.ctrader_bridge:
+            return {"success": False, "error": "bridge_unavailable"}
+        try:
+            target = url or self.config.get("ctrader.maven_url", "https://app.ctrader.com")
+
+            # Start browser and navigate
+            start_res = asyncio.run(self.ctrader_bridge.start(url=target, headless=headless))
+            if not start_res.get("success"):
+                return {"success": False, "error": "bridge_start_failed", "detail": start_res}
+
+            # Inject credentials and attempt login
+            inject_res = asyncio.run(self.ctrader_bridge.inject_login_credentials(str(account), password, server))
+            if not inject_res.get("success"):
+                return {"success": False, "error": "login_inject_failed", "detail": inject_res}
+
+            # Initialize session (auto-detect balance and phase)
+            initialized = asyncio.run(self.initialize_ctrader_session(account))
+            return {"success": bool(initialized), "initialized": initialized, "inject_detail": inject_res}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

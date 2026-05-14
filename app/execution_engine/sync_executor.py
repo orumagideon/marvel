@@ -137,13 +137,13 @@ class SynchronizedExecutionEngine:
                     self.logger.warning(f"[HEDGE] Trade execution failed: {hedge_result.get('error', 'Unknown error')}")
                 
                 # Minimal latency guard before Maven parallel dispatch
-                # If a Match-Trader bridge is present, immediately trigger
+                # If a cTrader bridge is present, immediately trigger
                 # its injection tasks to minimize delay (we still await verification)
                 if match_trader_bridge is not None:
                     # schedule bridge injections for accounts that opt-in
                     bridge_tasks = []
                     for account in maven_accounts:
-                        if account.get('use_match_trader'):
+                        if account.get('use_ctrader') or account.get('use_match_trader'):
                             bridge_tasks.append(
                                 self._execute_match_trader_trade(
                                     match_trader_bridge,
@@ -163,41 +163,41 @@ class SynchronizedExecutionEngine:
                             await asyncio.wait_for(asyncio.gather(*bridge_tasks), timeout=0.050)
                         except asyncio.TimeoutError:
                             # tasks may continue in background; record warning
-                            self.logger.warning("Match-Trader bridge tasks did not finish within timeout")
+                            self.logger.warning("cTrader bridge tasks did not finish within timeout")
                 else:
                     await asyncio.sleep(0.005)  # 5ms guard to ensure price stability
             
-            # 2. PARALLEL Maven fleet execution (all slots simultaneously)
-            # This ensures all 5 Maven slots receive orders within < 10ms spread
-            maven_start_time = time.time()
-            adjusted_maven_lots = self.apply_account_phase_multiplier(lot_size, maven_accounts)
-            maven_tasks = []
-            for idx, account in enumerate(maven_accounts):
-                acct_lot = adjusted_maven_lots[idx]
-                # If account is flagged to use Match-Trader, route to bridge instead
-                if account.get('use_match_trader') and match_trader_bridge is not None:
-                    maven_tasks.append(
-                        self._execute_match_trader_trade(
-                            match_trader_bridge,
-                            symbol,
-                            acct_lot,
-                            tp_pips,
-                            sl_pips,
-                            account,
-                            trade_type
+                # 2. PARALLEL Maven fleet execution (all slots simultaneously)
+                # This ensures all Maven slots receive orders within < 10ms spread
+                maven_start_time = time.time()
+                adjusted_maven_lots = self.apply_account_phase_multiplier(lot_size, maven_accounts)
+                maven_tasks = []
+                for idx, account in enumerate(maven_accounts):
+                    acct_lot = adjusted_maven_lots[idx]
+                    # If account is flagged to use cTrader, route to bridge instead
+                    if (account.get('use_ctrader') or account.get('use_match_trader')) and match_trader_bridge is not None:
+                        maven_tasks.append(
+                            self._execute_match_trader_trade(
+                                match_trader_bridge,
+                                symbol,
+                                acct_lot,
+                                tp_pips,
+                                sl_pips,
+                                account,
+                                trade_type
+                            )
                         )
-                    )
-                else:
-                    maven_tasks.append(
-                        self._execute_maven_trade(
-                            symbol,
-                            acct_lot,
-                            trade_type,
-                            account,
-                            tp_pips,
-                            sl_pips,
+                    else:
+                        maven_tasks.append(
+                            self._execute_maven_trade(
+                                symbol,
+                                acct_lot,
+                                trade_type,
+                                account,
+                                tp_pips,
+                                sl_pips,
+                            )
                         )
-                    )
             
             # Execute all Maven orders concurrently
             maven_results = await asyncio.gather(*maven_tasks, return_exceptions=True)
@@ -457,7 +457,7 @@ class SynchronizedExecutionEngine:
                                           tp_pips: float, sl_pips: float,
                                           account: Dict[str, Any],
                                           trade_type: TradeType) -> Dict[str, Any]:
-        """Route execution through the Match-Trader browser bridge.
+        """Route execution through the cTrader browser bridge.
 
         This method assumes the `bridge` implements `inject_and_click(lot, tp, sl, side)`.
         Returns a result dict similar to _execute_maven_trade for logging.

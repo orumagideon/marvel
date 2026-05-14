@@ -7,6 +7,9 @@ import customtkinter as ctk
 from typing import Optional, Dict, Any, Callable, List
 from datetime import datetime
 
+# Default symbol options shown near Buy/Sell controls
+SYMBOL_OPTIONS = ["USTECH", "NAS100", "XAUUSD", "US30", "GER40", "US100", "EURUSD"]
+
 
 class MarketFeedWidget(ctk.CTkFrame):
     """Real-time market data display"""
@@ -235,6 +238,15 @@ class TradingControlsWidget(ctk.CTkFrame):
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
         button_frame.grid_columnconfigure(2, weight=1)
+        button_frame.grid_columnconfigure(3, weight=1)
+        # Symbol dropdown placed beside buy/sell for quick selection
+        self.symbol_menu_var = ctk.StringVar(value=SYMBOL_OPTIONS[0])
+        self.symbol_menu = ctk.CTkOptionMenu(
+            button_frame,
+            values=SYMBOL_OPTIONS,
+            variable=self.symbol_menu_var,
+        )
+        self.symbol_menu.grid(row=0, column=2, sticky="ew", padx=(6, 0))
         
         self.buy_btn = ctk.CTkButton(
             button_frame,
@@ -265,7 +277,7 @@ class TradingControlsWidget(ctk.CTkFrame):
             hover_color="#888888",
             command=lambda: self.command_callback("close_all")
         )
-        self.close_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self.close_btn.grid(row=0, column=3, sticky="ew", padx=(6, 0))
         
         # Feature toggles
         toggle_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
@@ -331,6 +343,12 @@ class TradingControlsWidget(ctk.CTkFrame):
 
     def get_symbol(self) -> str:
         """Get the trade symbol entered by the user."""
+        # Prefer the quick selector next to the buttons when present
+        try:
+            if hasattr(self, "symbol_menu_var") and self.symbol_menu_var.get():
+                return str(self.symbol_menu_var.get()).strip().upper()
+        except Exception:
+            pass
         symbol = self.symbol_var.get().strip().upper().replace(" ", "")
         return symbol or "US100"
 

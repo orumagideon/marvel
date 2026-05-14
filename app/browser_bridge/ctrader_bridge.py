@@ -72,6 +72,22 @@ class CTraderDOMSelector:
         "xpath=//span[contains(@class, 'symbol')]",
         "xpath=//input[contains(@id, 'symbol')]",
     ]
+    # Login form selectors
+    LOGIN_USERNAME = [
+        "input[id*='username']", "input[name*='username']", "input[id*='login']",
+        "xpath=//input[contains(@placeholder, 'Account') or contains(@placeholder, 'Login') or contains(@placeholder,'Username')]",
+    ]
+    LOGIN_PASSWORD = [
+        "input[id*='password']", "input[name*='password']",
+        "xpath=//input[contains(@placeholder, 'Password')]",
+    ]
+    LOGIN_SERVER = [
+        "input[id*='server']", "input[name*='server']", "select[id*='server']",
+        "xpath=//input[contains(@placeholder, 'Server') or contains(@placeholder, 'Broker')]",
+    ]
+    LOGIN_BUTTONS = [
+        "button[id*='login']", "button[class*='login']", "xpath=//button[contains(., 'Log in') or contains(., 'Login') or contains(., 'Sign in')]",
+    ]
 
 
 class CTraderBridge:
@@ -153,6 +169,25 @@ class CTraderBridge:
                 self._discovered_selectors["sl"] = selector
                 break
 
+        # Try to detect login fields (optional)
+        for selector in CTraderDOMSelector.LOGIN_USERNAME:
+            elm = await page.query_selector(selector)
+            if elm:
+                self._discovered_selectors["login_username"] = selector
+                break
+
+        for selector in CTraderDOMSelector.LOGIN_PASSWORD:
+            elm = await page.query_selector(selector)
+            if elm:
+                self._discovered_selectors["login_password"] = selector
+                break
+
+        for selector in CTraderDOMSelector.LOGIN_SERVER:
+            elm = await page.query_selector(selector)
+            if elm:
+                self._discovered_selectors["login_server"] = selector
+                break
+
     async def _find_element(self, selector_list: List[str]) -> Optional[Any]:
         """Try multiple selectors and return first matching element"""
         if not self.is_session_active():
@@ -179,6 +214,77 @@ class CTraderBridge:
             return True
         except Exception:
             return False
+
+    async def inject_login_credentials(self, account: str, password: str, server: str) -> Dict[str, Any]:
+        """
+        Inject credentials into the cTrader login form and attempt to submit.
+
+        Returns dict with success and details.
+        """
+        if not self.is_session_active():
+            return {"success": False, "error": "session_inactive"}
+
+        page = self._page
+        result = {"success": False, "steps": {}}
+        try:
+            # Username/account
+            for sel in CTraderDOMSelector.LOGIN_USERNAME:
+                try:
+                    elm = await page.query_selector(sel)
+                    if elm:
+                        ok = await self._set_input_value(elm, account)
+                        result["steps"]["username"] = {"selector": sel, "injected": ok}
+                        break
+                except Exception:
+                    continue
+
+            # Password
+            for sel in CTraderDOMSelector.LOGIN_PASSWORD:
+                try:
+                    elm = await page.query_selector(sel)
+                    if elm:
+                        ok = await self._set_input_value(elm, password)
+                        result["steps"]["password"] = {"selector": sel, "injected": ok}
+                        break
+                except Exception:
+                    continue
+
+            # Server (optional)
+            for sel in CTraderDOMSelector.LOGIN_SERVER:
+                try:
+                    elm = await page.query_selector(sel)
+                    if elm:
+                        # Try fill or select
+                        try:
+                            await elm.fill("")
+                            await elm.type(str(server))
+                        except Exception:
+                            try:
+                                await elm.select_option(str(server))
+                            except Exception:
+                                pass
+                        result["steps"]["server"] = {"selector": sel, "injected": True}
+                        break
+                except Exception:
+                    continue
+
+            # Click login
+            for sel in CTraderDOMSelector.LOGIN_BUTTONS:
+                try:
+                    btn = await page.query_selector(sel)
+                    if btn:
+                        await btn.click()
+                        result["steps"]["login_click"] = {"selector": sel, "clicked": True}
+                        result["success"] = True
+                        return result
+                except Exception:
+                    continue
+
+            # If no login button found, mark success if fields injected
+            result["success"] = any(s.get("injected") for s in result.get("steps", {}).values())
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def inject_trade(self, lot: float, tp: float, sl: float) -> Dict[str, Any]:
         """
@@ -464,7 +570,7 @@ class CTraderBridge:
             return {"success": False, "error": str(e)}
 
     async def click_trade(self, side: str = "buy") -> Dict[str, Any]:
-        """Trigger the Buy or Sell button click on Match-Trader.
+        """Trigger the Buy or Sell button click on cTrader.
 
         side: 'buy' or 'sell'
         """

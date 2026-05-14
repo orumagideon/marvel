@@ -581,8 +581,10 @@ class MarvelDashboard(ctk.CTk):
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(12, 10))
 
         row_index = 1
-        self._add_login_field(card, row_index, "Terminal Path", terminal_var)
-        row_index += 1
+        # Terminal path is optional for Maven (we prefer browser automation)
+        if instance_type != MT5InstanceType.MAVEN_FLEET:
+            self._add_login_field(card, row_index, "Terminal Path", terminal_var)
+            row_index += 1
         self._add_login_field(card, row_index, "Account", account_var)
         row_index += 1
         self._add_login_field(card, row_index, "Password", password_var, show="*")
@@ -950,7 +952,9 @@ class MarvelDashboard(ctk.CTk):
     ) -> Dict[str, Any]:
         """Blocking connect/login logic executed outside the UI thread."""
         if not terminal_path:
-            return {"success": False, "message": f"{success_prefix} terminal path required"}
+            # Allow Maven fleet to use browser-based login when terminal path is omitted
+            if instance_type != MT5InstanceType.MAVEN_FLEET:
+                return {"success": False, "message": f"{success_prefix} terminal path required"}
 
         if not account_text.isdigit():
             return {"success": False, "message": f"{success_prefix} account must be numeric"}
@@ -961,8 +965,16 @@ class MarvelDashboard(ctk.CTk):
         account = int(account_text)
 
         if instance_type == MT5InstanceType.MAVEN_FLEET:
-            initialized = self.system.initialize_maven_instance(terminal_path)
-            login_ok = initialized and self.system.login_maven_account(account, password, server)
+            # If a terminal path is provided, initialize via local MT5. Otherwise use browser-based cTrader automation.
+            if terminal_path:
+                initialized = self.system.initialize_maven_instance(terminal_path)
+                login_ok = initialized and self.system.login_maven_account(account, password, server)
+            else:
+                # Browser-based flow: start cTrader bridge and inject credentials
+                resp = self.system.login_maven_via_ctrader_browser(account, password, server)
+                login_ok = bool(resp.get("success"))
+                initialized = login_ok
+
             config_key = "mt5.maven_terminal_path"
             profile_prefix = "dashboard_maven_login"
         else:
@@ -1246,17 +1258,17 @@ class MarvelDashboard(ctk.CTk):
                 return
             
             tp, sl = self.trading_controls.get_tp_sl()
-            # If Match-Trader bridge is configured and any active account uses it,
+            # If cTrader bridge is configured and any active account uses it,
             # ensure the bridge session is active before proceeding and show overlay.
             try:
-                bridge = getattr(self.system, "match_trader_bridge", None)
+                bridge = getattr(self.system, "ctrader_bridge", None)
                 if bridge:
                     # show overlay message
-                    self.trading_controls.set_overlay_status(f"Injecting {self.trading_controls.get_lot_size():.2f} Lots into Match-Trader...")
+                    self.trading_controls.set_overlay_status(f"Injecting {self.trading_controls.get_lot_size():.2f} Lots into cTrader...")
                     if not bridge.is_session_active():
                         self.trading_controls.set_overlay_status("")
                         self.trading_controls.set_trading_enabled(True)
-                        self.logger.warning("Match-Trader bridge not active - trade blocked")
+                        self.logger.warning("cTrader bridge not active - trade blocked")
                         return
             except Exception:
                 pass
@@ -1276,13 +1288,13 @@ class MarvelDashboard(ctk.CTk):
             
             tp, sl = self.trading_controls.get_tp_sl()
             try:
-                bridge = getattr(self.system, "match_trader_bridge", None)
+                bridge = getattr(self.system, "ctrader_bridge", None)
                 if bridge:
-                    self.trading_controls.set_overlay_status(f"Injecting {self.trading_controls.get_lot_size():.2f} Lots into Match-Trader...")
+                    self.trading_controls.set_overlay_status(f"Injecting {self.trading_controls.get_lot_size():.2f} Lots into cTrader...")
                     if not bridge.is_session_active():
                         self.trading_controls.set_overlay_status("")
                         self.trading_controls.set_trading_enabled(True)
-                        self.logger.warning("Match-Trader bridge not active - trade blocked")
+                        self.logger.warning("cTrader bridge not active - trade blocked")
                         return
             except Exception:
                 pass
